@@ -10,7 +10,7 @@
     "typeorm": "typeorm-ts-node-commonjs"
   },
   "dependencies": {
-    "@fastify/jwt": "7.2.4",
+    "@fastify/jwt": "^7.2.4",
     "@fastify/rate-limit": "8.0.0",
     "@types/validator": "^13.12.2",
     "bcrypt": "5.1.0",

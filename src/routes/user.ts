@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AppDataSource } from "../data-source";
-import { User } from "../entity/User";
+import { User } from "../entity/user";
 import "@fastify/jwt";
 import { JWT } from "@fastify/jwt";
 
