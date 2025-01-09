@@ -1,0 +1,18 @@
+services:
+  mariadb:
+    image: mariadb:latest
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: My-@giftCard_Password
+      MYSQL_USER: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - "secure_data:/var/lib/mysql"
+volumes:
+  secure_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: D:\Programming\GiftCardManagement\giftcardmanagement_secure_data
+      o: bind
