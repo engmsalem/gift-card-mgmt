@@ -1,3 +1,4 @@
 node_modules
 *.env
 GiftCardManagement_secure_data
+.cursorrules
