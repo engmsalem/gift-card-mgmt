@@ -1,21 +1,10 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AppDataSource } from "../data-source";
 import { User } from "../entity/user";
-import "@fastify/jwt";
-import { JWT } from "@fastify/jwt";
 
 declare module "fastify" {
-  /* interface FastifyRequest {
-    jwtVerify: JWT["verify"];
-  } */
-  interface FastifyRequest {
-    myPluginProp: string;
-  }
   interface FastifyInstance {
-    authenticate: (
-      request: FastifyRequest,
-      reply: FastifyReply
-    ) => Promise<void>;
+    authenticate: (request: any, reply: any) => Promise<void>; // Add the type for your custom method
   }
 }
 

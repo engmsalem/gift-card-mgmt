@@ -15,3 +15,7 @@ export const AppDataSource = new DataSource({
   migrations: [],
   subscribers: [],
 });
+
+if (!process.env.DB_USERNAME || !process.env.DB_PASSWORD) {
+  throw new Error("Database configuration missing");
+}

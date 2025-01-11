@@ -6,9 +6,11 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { Role } from "../enums/roles";
+import { IsEmail, MinLength } from "class-validator";
+import ExtendedBaseEntity from "./extended-base-entity";
 
 @Entity()
-export class User {
+export class User extends ExtendedBaseEntity {
   @PrimaryColumn()
   id: number;
 
@@ -16,9 +18,11 @@ export class User {
   tenantId: number;
 
   @Column({ unique: true })
+  @IsEmail()
   email: string;
 
   @Column()
+  @MinLength(6)
   passwordHash: string;
 
   @Column()

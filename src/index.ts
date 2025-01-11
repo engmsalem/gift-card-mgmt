@@ -1,29 +1,37 @@
 import "reflect-metadata";
-import { createConnection } from "typeorm";
-import fastify from "fastify";
-import jwt from "@fastify/jwt";
+import Fastify, { FastifyInstance } from "fastify";
 import { AppDataSource } from "./data-source";
+import errorHandler from "./plugins/error-handler";
+import jwtPlugin from "./plugins/jwt";
+import rateLimit from "./plugins/rate-limit";
 
-// Initialize TypeORM before setting up Fastify
 AppDataSource.initialize()
   .then(() => {
     console.log("Database connected");
 
-    const app = fastify();
-    app.register(jwt, {
-      secret: "your-secret-key",
+    const app: FastifyInstance = Fastify({
+      logger: {
+        level: process.env.NODE_ENV === "production" ? "info" : "debug",
+      },
     });
 
-    app.get("/", async (request, reply) => {
-      return { hello: "world" };
-    });
+    // Register plugins in order
+    app.register(errorHandler); // Register error handler first
+    app.register(rateLimit); // Then rate limiting
+    app.register(jwtPlugin); // Then authentication
 
-    app.listen({ port: 3000 }, (err, address) => {
-      if (err) {
-        console.error(err);
+    // Register routes last
+    app.register(import("./routes/auth"));
+    app.register(import("./routes/user"));
+
+    const start = async () => {
+      try {
+        await app.listen({ port: 3000 });
+      } catch (err) {
+        app.log.error(err);
         process.exit(1);
       }
-      console.log(`Server listening at ${address}`);
-    });
+    };
+    start();
   })
   .catch((error) => console.log(error));
