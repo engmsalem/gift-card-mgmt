@@ -17,6 +17,9 @@ export class User extends ExtendedBaseEntity {
   @Column()
   tenantId: number;
 
+  @Column()
+  name: string;
+
   @Column({ unique: true })
   @IsEmail()
   email: string;

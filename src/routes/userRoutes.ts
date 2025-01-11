@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AppDataSource } from "../data-source";
-import { User } from "../entity/user";
+import { User } from "../entities/user";
 
 declare module "fastify" {
   interface FastifyInstance {

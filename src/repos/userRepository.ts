@@ -1,4 +1,4 @@
-import { User } from "../entity/user";
+import { User } from "../entities/user";
 import { AppDataSource } from "../data-source";
 import { Role } from "../enums/roles";
 import "reflect-metadata";
