@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { AuthService } from "../services/authService"; // Auth service
 import { UserService } from "../services/userService"; // Optional, for registration
+import { Role } from "../enums/roles";
 
 export default async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService(fastify); // Pass database instance
@@ -30,7 +31,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       };
 
       try {
-        const newUser = await userService.createUser(name, email);
+        const newUser = await userService.createUser({
+          email,
+          passwordHash: password,
+          role: Role.REDEMPTION,
+          tenantId: 1,
+        });
         return reply.status(201).send(newUser);
       } catch (error: any) {
         return reply.status(400).send({ error: error.message });

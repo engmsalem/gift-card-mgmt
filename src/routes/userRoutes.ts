@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { UserService } from "../services/userService";
 import { AppDataSource } from "../data-source";
 import { User } from "../entities/user";
 
@@ -9,6 +10,8 @@ declare module "fastify" {
 }
 
 export default async function userRoutes(fastify: FastifyInstance) {
+  const userService = new UserService(fastify);
+
   fastify.decorate(
     "authenticate",
     async function (request: FastifyRequest, reply: FastifyReply) {
@@ -24,11 +27,14 @@ export default async function userRoutes(fastify: FastifyInstance) {
     "/",
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const userRepository = AppDataSource.getRepository(User);
-      const users = await userRepository.find();
-      return reply.send(users);
+      try {
+        const users = await userService.getAllUsers();
+        return reply.send(users);
+      } catch (error) {
+        return reply.status(500).send({ error: error.message });
+      }
     }
   );
 
-  // Add other CRUD operations here
+  // Add other CRUD operations here, using userService methods
 }
