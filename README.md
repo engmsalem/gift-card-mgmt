@@ -1,1 +1,253 @@
 # gift-card-mgmt
+
+A multi-tenant **gift card management API** built with Fastify, TypeORM and PostgreSQL.
+
+The goal is a backend where tenants (merchants) issue gift cards and their staff can redeem and refund balances, with an audit trail.
+
+> **Status: early prototype / work in progress.** Tenant signup, user management and authentication are implemented and tested. Gift card, transaction and audit features have a database schema but no API yet. See [Project status](#project-status).
+
+---
+
+## Tech stack
+
+| Layer      | Choice                                                                 |
+| ---------- | ---------------------------------------------------------------------- |
+| Runtime    | Node.js + TypeScript 5 (CommonJS)                                      |
+| HTTP       | [Fastify 5](https://fastify.dev/)                                      |
+| ORM        | [TypeORM 1.x](https://typeorm.io/) (`postgres`, `pg` driver), migrations |
+| Database   | PostgreSQL 18 (via Docker Compose)                                     |
+| Auth       | `@fastify/jwt` access tokens + opaque rotating refresh tokens, `bcrypt` |
+| Validation | Fastify JSON schemas (request and response)                            |
+| Tooling    | `node:test`, ESLint 9 + typescript-eslint, GitHub Actions              |
+
+## Project structure
+
+```
+src/
+├── index.ts                 # Entry point: load config, connect DB, build app, listen, graceful shutdown
+├── app.ts                   # buildApp(): Fastify instance, plugins, routes (no listen, used by tests)
+├── config.ts                # Reads and validates all environment variables once
+├── data-source.ts           # TypeORM DataSource for the app (least-privileged app role)
+├── migration-data-source.ts # TypeORM DataSource for migrations (admin role)
+├── migrations/              # Schema history; the source of truth for the database schema
+├── entities/                # Tenant, User, RefreshToken (+ bigint transformer)
+├── enums/roles.ts           # admin | staff
+├── errors.ts                # AppError + 400/401/403/404/409 subclasses
+├── credentials.ts           # Email normalisation/validation, bcrypt 72-byte check
+├── tokens.ts                # Refresh token generation and hashing, token lifetimes
+├── plugins/
+│   ├── error-handler.ts     # Maps AppError / validation / unique violations to status codes
+│   ├── jwt.ts               # Access token signing/verification, `authenticate`, `requireRole`
+│   └── rate-limit.ts        # 100 requests / minute per IP (login: 10 / minute)
+├── routes/                  # tenantRoutes, authRoutes, userRoutes, shared response schemas
+├── services/                # TenantService, AuthService, UserService
+└── types/requests.d.ts      # Fastify / JWT type augmentations
+
+test/
+├── unit/                    # No database needed
+├── integration/             # Real PostgreSQL via app.inject(); helpers.ts sets up the test DB
+└── support/test-db.ts       # Guard that refuses to reset any database not named *_test
+
+db/init/01-app-role.sh       # First-start Postgres script: creates the app role and the _test database
+docker-compose.yml           # PostgreSQL, configured from .env
+.github/workflows/ci.yml     # CI pipeline
+```
+
+Layering is **routes → services → TypeORM repositories**. The `DataSource` is exposed to services as a Fastify decorator (`fastify.db`).
+
+## Data model
+
+Defined by the migrations in `src/migrations/`. All tenant-owned tables carry a `tenant_id` (one shared database, isolated by tenant).
+
+| Table            | Purpose                                                                  | Entity / API |
+| ---------------- | ------------------------------------------------------------------------ | ------------ |
+| `tenants`        | Merchants, each with a unique `subdomain`                               | Yes          |
+| `users`          | Tenant staff: `name`, globally unique `email`, `role` (`admin` / `staff`) | Yes          |
+| `refresh_tokens` | SHA-256 hashes of issued refresh tokens, with expiry and revocation       | Yes          |
+| `gift_cards`     | Card number, PIN, balance, expiry date, status (`active` / `inactive` / `expired`) | Not yet |
+| `transactions`   | `redemption` / `refund` movements against a gift card                     | Not yet      |
+| `audit_logs`     | JSON (`jsonb`) action log per tenant/user                                 | Not yet      |
+
+## Getting started
+
+### Prerequisites
+
+- Node.js **20.19+, 22.13+ or 24.11+** (required by TypeORM 1.x)
+- Docker with Docker Compose
+
+### 1. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Both the app and `docker-compose.yml` read this file.
+
+| Variable               | Required | Default                      | Notes |
+| ---------------------- | -------- | ---------------------------- | ----- |
+| `PORT`                 | no       | `3000`                       | HTTP port the API listens on |
+| `NODE_ENV`             | no       | `development`                | `production` lowers log verbosity |
+| `DB_HOST`              | no       | `localhost`                  | |
+| `DB_PORT`              | no       | `5432`                       | Also the host port Docker publishes PostgreSQL on. Pick another (e.g. `5434`) if 5432 is taken |
+| `DB_DATABASE`          | yes      | none                         | e.g. `gift_card_mgmt`. Docker also creates `<DB_DATABASE>_test` for integration tests |
+| `DB_USERNAME`          | yes      | none                         | **App role**: read/write data only, cannot change the schema |
+| `DB_PASSWORD`          | yes      | none                         | Password for the app role |
+| `DB_ADMIN_USERNAME`    | yes\*    | `DB_USERNAME`                | **Admin role** (schema owner), used only by migrations. \*Required by Docker Compose |
+| `DB_ADMIN_PASSWORD`    | yes\*    | `DB_PASSWORD`                | Password for the admin role |
+| `JWT_SECRET`           | yes      | none                         | At least 32 characters. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
+| `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement |
+| `CORS_ORIGIN`          | no       | `*`                          | |
+| `CORS_METHODS`         | no       | `GET,POST,PUT,DELETE`        | Comma-separated |
+| `CORS_ALLOWED_HEADERS` | no       | `Content-Type,Authorization` | Comma-separated |
+
+The app refuses to start if anything is missing or invalid, and lists every problem at once.
+
+Example `.env` for local development:
+
+```dotenv
+PORT=3000
+NODE_ENV=development
+DB_HOST=localhost
+DB_PORT=5432
+DB_DATABASE=gift_card_mgmt
+DB_USERNAME=gcm_app
+DB_PASSWORD=change-me
+DB_ADMIN_USERNAME=gcm_owner
+DB_ADMIN_PASSWORD=change-me-too
+JWT_SECRET=<output of the command above>
+```
+
+**Why two database users?** The API connects as the app role, which can only read and write rows. If the API is ever compromised, the attacker can't drop tables, create roles or reach other databases. Schema changes need the admin role, which only migrations use. In production, keep the admin credentials out of the API server's environment and use them only in the deploy step that runs migrations.
+
+### 2. Start PostgreSQL
+
+```bash
+docker compose up -d --wait
+```
+
+On first start this creates the admin role, the app role, `DB_DATABASE` and `DB_DATABASE_test`, and stores data in the `postgres_data` volume.
+
+> The roles and databases are only created **the first time** the volume is initialised. If you change any `DB_*` credentials later, or are upgrading from an older version of this project, reset it with `docker compose down -v` (this deletes all data) and start again.
+
+To open a SQL shell: `docker compose exec postgres psql -U <DB_ADMIN_USERNAME> -d <DB_DATABASE>`.
+
+### 3. Install, migrate and run
+
+```bash
+npm install
+npm run migration:run     # create/upgrade the schema (admin role)
+npm run dev               # ts-node src/index.ts
+# or
+npm run build && npm run migration:run:prod && npm start
+```
+
+The server listens on `http://localhost:3000` (or `$PORT`).
+
+### 4. Try it
+
+```bash
+# Create a tenant and its first admin
+curl -X POST localhost:3000/tenants -H "Content-Type: application/json" \
+  -d '{"tenant":{"name":"Acme","subdomain":"acme"},"admin":{"name":"Ada","email":"ada@acme.com","password":"correct-horse"}}'
+
+# Log in -> { accessToken, refreshToken, expiresIn }
+curl -X POST localhost:3000/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"ada@acme.com","password":"correct-horse"}'
+
+# Call a protected route
+curl localhost:3000/users/me -H "Authorization: Bearer <accessToken>"
+```
+
+(In PowerShell, use `Invoke-RestMethod` or a REST client instead of these single-quoted bodies.)
+
+## API
+
+| Method | Path            | Auth          | Body | Response |
+| ------ | --------------- | ------------- | ---- | -------- |
+| POST   | `/tenants`      | none          | `{ tenant: { name, subdomain }, admin: { name, email, password } }` | `201 { tenant, user }`. Creates the tenant and its first `admin` in one transaction. `409` if the subdomain or email is taken |
+| POST   | `/auth/login`   | none          | `{ email, password }` | `200 { accessToken, refreshToken, expiresIn }`. `401` on bad credentials. Limited to 10 / minute |
+| POST   | `/auth/refresh` | none          | `{ refreshToken }` | `200` with a **new** token pair. The old refresh token stops working |
+| POST   | `/auth/logout`  | none          | `{ refreshToken }` | `204`. Revokes the refresh token (idempotent) |
+| GET    | `/users/me`     | Bearer        | none | `200` own profile |
+| GET    | `/users`        | Bearer, admin | none | `200` users of the caller's tenant |
+| POST   | `/users`        | Bearer, admin | `{ name, email, password, role? }` | `201`. Creates a user in the caller's tenant (`role` defaults to `staff`) |
+
+Rules:
+- `subdomain`: 3–50 characters, lowercase letters, digits and hyphens. `password`: 8–72 characters. Emails are trimmed and lowercased.
+- Unknown body fields are rejected with `400`. The tenant always comes from the caller's token, never from the body.
+- Errors use `{ "error": "<message>" }` with `400` (validation), `401` (missing/invalid token or credentials), `403` (wrong role), `404`, `409` (duplicate), `429` (rate limit).
+- Password hashes are never returned (excluded from queries and stripped by response schemas).
+
+### Tokens
+
+- **Access token:** a JWT (HS256, signed with `JWT_SECRET`), valid for **15 minutes**, with claims `sub` (user id), `tid` (tenant id), `role` and `typ: "access"`. Send it as `Authorization: Bearer <token>`.
+- **Refresh token:** a random opaque string, valid for **7 days**. Only its SHA-256 hash is stored. Each refresh **rotates** it: the old one is revoked and a new pair is returned. Presenting a refresh token that was already used or revoked is treated as theft, and **all** of that user's refresh tokens are revoked, forcing a new login.
+- Access tokens can't be revoked early. After logout they stay valid until they expire (at most 15 minutes).
+
+## Database migrations
+
+The schema is managed only through migrations in `src/migrations/`. The app never changes the schema itself. Migrations run as the admin role.
+
+```bash
+npm run migration:run                                   # apply pending migrations
+npm run migration:revert                                # undo the most recent one
+npm run migration:show                                  # list applied / pending
+npm run migration:generate -- src/migrations/AddXyz     # write a migration from entity changes
+npm run migration:check                                 # fail if entities and schema differ
+npm run migration:run:prod                              # apply using the compiled dist/ files
+```
+
+To change the schema: edit the entity, run `migration:generate`, review the generated SQL, run `migration:run`, and commit the migration together with the code. Don't edit a migration that has already been applied anywhere that matters. Add a new one instead.
+
+## Testing and linting
+
+```bash
+npm test                    # unit tests (no database needed)
+npm run test:integration    # integration tests against PostgreSQL
+npm run lint                # ESLint (lint:fix to auto-fix)
+npm run typecheck           # tsc over src/ and test/
+```
+
+Integration tests need the Docker database running. They automatically use `<DB_DATABASE>_test`, apply migrations to it, and empty its tables between tests. As a safety net, they **refuse to run against any database whose name doesn't end in `_test`** (override with `TEST_DB_DATABASE` only if you know what you're doing). Your development data is never touched.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`:
+
+- **checks** (Node 22 and 24): `npm ci`, lint, typecheck, build, unit tests.
+- **integration** (Node 24): starts PostgreSQL with this repo's `docker-compose.yml` (so the role setup is tested too), runs migrations, `migration:check`, the integration tests, and a boot smoke test of the compiled server running as the app role.
+
+## Project status
+
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 16 unit tests, 41 integration tests and the migration drift check._
+
+### Known limitations
+
+- **No gift card features yet.** `gift_cards`, `transactions` and `audit_logs` exist in the schema only.
+- **No subdomain routing.** Tenants have a `subdomain`, but requests aren't resolved by `Host` header yet. The tenant comes from the access token.
+- Emails are unique across all tenants, so one person can't belong to two tenants with the same email.
+- Access tokens stay valid for up to 15 minutes after logout. Expired and revoked rows in `refresh_tokens` are never cleaned up.
+- Two simultaneous refreshes with the same refresh token look like token reuse and log the user out everywhere. This is the usual trade-off of rotation with reuse detection.
+- `POST /tenants` is public and only covered by the global rate limit.
+- `gift_cards.status` is nullable (it has a default).
+
+### Security notes
+
+- MariaDB data files and an old MariaDB root password were committed in earlier history. They were removed from the tree, but still exist in git history. Don't reuse that password anywhere.
+- The Docker admin role is a Postgres superuser. Outside local development, use a dedicated schema-owner role instead.
+
+## Roadmap
+
+1. Gift cards: entities and endpoints to issue cards, check balances, redeem and refund, with transactional balance updates (`SELECT ... FOR UPDATE`) and a transaction history.
+2. Audit logging for sensitive actions.
+3. Subdomain-based tenant resolution and per-tenant settings.
+4. Cleanup job for expired refresh tokens. User management endpoints (update role, deactivate, reset password).
+5. Stricter rate limits on public endpoints, and API documentation (OpenAPI via `@fastify/swagger`).
+
+## Author
+
+Maintained by [@engmsalem](https://github.com/engmsalem).
+
+## License
+
+`package.json` declares the **ISC** license, but the repo has no `LICENSE` file yet. Add one to make the license explicit.
