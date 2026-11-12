@@ -1,53 +1,40 @@
 import "reflect-metadata";
-import Fastify, { FastifyInstance } from "fastify";
-import { AppDataSource } from "./data-source";
-import errorHandler from "./plugins/error-handler";
-import jwtPlugin from "./plugins/jwt";
-import rateLimit from "./plugins/rate-limit";
-import cors from "@fastify/cors";
-import dotenv from "dotenv"; // Import dotenv
 
-dotenv.config(); // Load environment variables
-AppDataSource.initialize()
-  .then(() => {
-    console.log("Database connected");
+async function main() {
+  // Loaded lazily: importing config validates the environment and may throw a ConfigError,
+  // which must be caught below rather than surface as an uncaught module-load exception.
+  const { config } = await import("./config");
+  const { AppDataSource } = await import("./data-source");
+  const { buildApp } = await import("./app");
 
-    const app: FastifyInstance = Fastify({
-      logger: {
-        level: process.env.NODE_ENV === "production" ? "info" : "debug",
-      },
-    });
+  await AppDataSource.initialize();
+  console.log("Database connected");
 
-    // Register plugins in order
-    app.register(errorHandler); // Register error handler first
-    app.register(rateLimit); // Then rate limiting
-    app.register(cors, {
-      origin: process.env.CORS_ORIGIN || "*", // Use environment variable or default to "*"
-      methods: process.env.CORS_METHODS?.split(",") || [
-        "GET",
-        "POST",
-        "PUT",
-        "DELETE",
-      ], // Split methods from env
-      allowedHeaders: process.env.CORS_ALLOWED_HEADERS?.split(",") || [
-        "Content-Type",
-        "Authorization",
-      ], // Split headers from env
-    });
-    app.register(jwtPlugin); // Then authentication
+  const app = await buildApp({ dataSource: AppDataSource });
 
-    // Register routes last
-    app.register(import("./routes/authRoutes"));
-    app.register(import("./routes/userRoutes"));
+  const shutdown = async (signal: string) => {
+    app.log.info(`${signal} received, shutting down`);
+    try {
+      await app.close();
+      await AppDataSource.destroy();
+      process.exit(0);
+    } catch (err) {
+      app.log.error(err);
+      process.exit(1);
+    }
+  };
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
-    const start = async () => {
-      try {
-        await app.listen({ port: 3000 });
-      } catch (err) {
-        app.log.error(err);
-        process.exit(1);
-      }
-    };
-    start();
-  })
-  .catch((error) => console.log(error));
+  await app.listen({ port: config.port });
+}
+
+main().catch((err) => {
+  if (err instanceof Error && err.name === "ConfigError") {
+    // Configuration mistakes are operator errors: the message names the variables, no stack needed
+    console.error(err.message);
+  } else {
+    console.error("Startup failed:", err);
+  }
+  process.exit(1);
+});

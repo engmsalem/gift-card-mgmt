@@ -1,40 +1,54 @@
 import { FastifyInstance } from "fastify";
-import { UserRepository } from "../repositories/userRepository";
+import bcrypt from "bcrypt";
+import { Repository } from "typeorm";
 import { User } from "../entities/user";
-import { UserCreationData } from "../interfaces/userCreationData"; // Import the interface
+import { Role } from "../enums/roles";
+import { ConflictError, NotFoundError } from "../errors";
+import { assertPasswordFitsBcrypt, assertValidEmail, normalizeEmail } from "../credentials";
+
+export interface CreateUserInput {
+  name: string;
+  email: string;
+  password: string;
+  role?: Role;
+}
 
 export class UserService {
-  //commented to use testify decorator approach
-  // constructor(private dataSource: DataSource) {}
-  private userRepository: UserRepository;
-  constructor(private app: FastifyInstance) {
-    // Access the User repository using the Fastify instance
-    this.userRepository = new UserRepository(app.db.getRepository(User));
+  private userRepository: Repository<User>;
+
+  constructor(app: FastifyInstance) {
+    this.userRepository = app.db.getRepository(User);
   }
 
-  async createUser(userData: UserCreationData) {
-    // Validate business logic
-    const existingUser = await this.userRepository.findByEmail(userData.email);
-    if (existingUser) {
-      throw new Error("User with this email already exists");
+  /** The tenant always comes from the caller's token, never from the request body. */
+  async createUser(tenantId: number, input: CreateUserInput) {
+    const email = normalizeEmail(input.email);
+    assertValidEmail(email);
+    assertPasswordFitsBcrypt(input.password);
+
+    if (await this.userRepository.existsBy({ email })) {
+      throw new ConflictError("Email already registered");
     }
 
-    // Save the new user
-    return this.userRepository.createUser(
-      userData.email,
-      userData.passwordHash,
-      userData.role,
-      userData.tenantId
+    const passwordHash = await bcrypt.hash(input.password, 10);
+    return this.userRepository.save(
+      this.userRepository.create({
+        tenantId,
+        name: input.name,
+        email,
+        passwordHash,
+        role: input.role ?? Role.STAFF,
+      })
     );
   }
-  // Method to get all users
-  async getAllUsers(): Promise<User[]> {
-    // Call repository to fetch users
-    const users = await this.userRepository.getAllUsers();
 
-    // Apply business logic (if any)
-    // Example: Filter users, add metadata, etc.
+  listUsers(tenantId: number): Promise<User[]> {
+    return this.userRepository.find({ where: { tenantId }, order: { id: "ASC" } });
+  }
 
-    return users;
+  async getUser(tenantId: number, id: number): Promise<User> {
+    const user = await this.userRepository.findOneBy({ id, tenantId });
+    if (!user) throw new NotFoundError("User not found");
+    return user;
   }
 }

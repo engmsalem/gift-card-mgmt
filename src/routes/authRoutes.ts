@@ -1,100 +1,55 @@
 import { FastifyInstance } from "fastify";
-import { AuthService } from "../services/authService"; // Auth service
-import { UserService } from "../services/userService"; // Optional, for registration
-import { Role } from "../enums/roles";
+import { AuthService } from "../services/authService";
+import { errorResponse, tokenPairResponse } from "./schemas";
+
+const refreshTokenBody = {
+  type: "object",
+  required: ["refreshToken"],
+  additionalProperties: false,
+  properties: { refreshToken: { type: "string", minLength: 1, maxLength: 200 } },
+} as const;
 
 export default async function authRoutes(fastify: FastifyInstance) {
-  const authService = new AuthService(fastify); // Pass database instance
-  const userService = new UserService(fastify); // For registration logic
+  const authService = new AuthService(fastify);
 
-  // User Registration
-  fastify.post(
-    "/auth/register",
-    {
-      schema: {
-        body: {
-          type: "object",
-          required: ["name", "email", "password"],
-          properties: {
-            name: { type: "string" },
-            email: { type: "string", format: "email" },
-            password: { type: "string", minLength: 6 },
-          },
-        },
-      },
-    },
-    async (request, reply) => {
-      const { name, email, password } = request.body as {
-        name: string;
-        email: string;
-        password: string;
-      };
-
-      try {
-        const newUser = await userService.createUser({
-          email,
-          passwordHash: password,
-          role: Role.REDEMPTION,
-          tenantId: 1,
-        });
-        return reply.status(201).send(newUser);
-      } catch (error: any) {
-        return reply.status(400).send({ error: error.message });
-      }
-    }
-  );
-
-  // User Login
-  fastify.post(
+  fastify.post<{ Body: { email: string; password: string } }>(
     "/auth/login",
     {
+      // Stricter than the global limit: this route is the password-guessing target
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
       schema: {
         body: {
           type: "object",
           required: ["email", "password"],
+          additionalProperties: false,
           properties: {
-            email: { type: "string", format: "email" },
-            password: { type: "string" },
+            email: { type: "string", maxLength: 254 },
+            password: { type: "string", maxLength: 128 },
           },
         },
+        response: { 200: tokenPairResponse, "4xx": errorResponse },
       },
     },
-    async (request, reply) => {
-      const { email, password } = request.body as {
-        email: string;
-        password: string;
-      };
-
-      try {
-        const token = await authService.login(email, password);
-        return reply.send({ token });
-      } catch (error: any) {
-        return reply.status(401).send({ error: error.message });
-      }
-    }
+    async (request) => authService.login(request.body.email, request.body.password)
   );
 
-  // Token Refresh
-  fastify.post("/auth/refresh", async (request, reply) => {
-    const { refreshToken } = request.body as { refreshToken: string };
+  fastify.post<{ Body: { refreshToken: string } }>(
+    "/auth/refresh",
+    {
+      schema: {
+        body: refreshTokenBody,
+        response: { 200: tokenPairResponse, "4xx": errorResponse },
+      },
+    },
+    async (request) => authService.refresh(request.body.refreshToken)
+  );
 
-    try {
-      const newToken = await authService.refreshToken(refreshToken);
-      return reply.send({ token: newToken });
-    } catch (error: any) {
-      return reply.status(401).send({ error: error.message });
+  fastify.post<{ Body: { refreshToken: string } }>(
+    "/auth/logout",
+    { schema: { body: refreshTokenBody } },
+    async (request, reply) => {
+      await authService.logout(request.body.refreshToken);
+      return reply.status(204).send();
     }
-  });
-
-  // Logout
-  fastify.post("/auth/logout", async (request, reply) => {
-    const { refreshToken } = request.body as { refreshToken: string };
-
-    try {
-      await authService.logout(refreshToken);
-      return reply.status(200).send({ message: "Logged out successfully" });
-    } catch (error: any) {
-      return reply.status(400).send({ error: error.message });
-    }
-  });
+  );
 }

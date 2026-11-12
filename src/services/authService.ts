@@ -1,91 +1,121 @@
 import { FastifyInstance } from "fastify";
 import bcrypt from "bcrypt";
+import { Repository } from "typeorm";
+import { RefreshToken } from "../entities/refresh-token";
 import { User } from "../entities/user";
-import { Role } from '../enums/roles';
+import { UnauthorizedError } from "../errors";
+import { normalizeEmail } from "../credentials";
+import { ACCESS_TOKEN_TYPE } from "../plugins/jwt";
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  REFRESH_TOKEN_TTL_MS,
+  generateRefreshToken,
+  hashRefreshToken,
+} from "../tokens";
 
+// bcrypt hash of a throwaway string. Compared against when the email is unknown so that
+// unknown-email and wrong-password logins take the same time.
+const DUMMY_HASH = "$2b$10$AlPljfVmB4h2lY.yVrn99estwLM1wVtO8bJvn4qM6nj.Lz3UePL/6";
+
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
 
 export class AuthService {
-  private userRepository;
+  private userRepository: Repository<User>;
+  private tokenRepository: Repository<RefreshToken>;
 
   constructor(private app: FastifyInstance) {
-    // Access the User repository using the Fastify instance
     this.userRepository = app.db.getRepository(User);
+    this.tokenRepository = app.db.getRepository(RefreshToken);
+  }
+
+  async login(email: string, password: string): Promise<TokenPair> {
+    // passwordHash is `select: false`, so request it explicitly
+    const user = await this.userRepository.findOne({
+      where: { email: normalizeEmail(email) },
+      select: { id: true, tenantId: true, role: true, passwordHash: true },
+    });
+
+    const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+    if (!user || !valid) {
+      throw new UnauthorizedError("Invalid email or password");
+    }
+    return this.issueTokens(user);
   }
 
   /**
-   * Handles user login by validating credentials and returning a JWT.
+   * Rotates a refresh token. The presented token is revoked atomically; presenting a token
+   * that was already revoked is treated as theft and revokes all of the user's tokens.
    */
-  async login(email: string, password: string) {
-    // Find user by email
-    const user = await this.userRepository.findOneBy({ email });
+  async refresh(refreshToken: string): Promise<TokenPair> {
+    const tokenHash = hashRefreshToken(refreshToken);
+
+    const result = await this.tokenRepository
+      .createQueryBuilder()
+      .update()
+      .set({ revokedAt: () => "now()" })
+      .where("token_hash = :tokenHash AND revoked_at IS NULL AND expires_at > now()", {
+        tokenHash,
+      })
+      .returning("user_id")
+      .execute();
+    const rows = result.raw as { user_id: string }[];
+
+    if (rows.length === 0) {
+      const existing = await this.tokenRepository.findOneBy({ tokenHash });
+      if (existing?.revokedAt) {
+        await this.revokeAllForUser(existing.userId);
+      }
+      throw new UnauthorizedError("Invalid or expired refresh token");
+    }
+
+    // Role and tenant are re-read so changes apply on the next refresh
+    const user = await this.userRepository.findOneBy({ id: Number(rows[0].user_id) });
     if (!user) {
-      throw new Error("Invalid email or password");
+      throw new UnauthorizedError("Invalid or expired refresh token");
     }
-
-    // Validate password
-    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
-    if (!isPasswordValid) {
-      throw new Error("Invalid email or password");
-    }
-
-    // Generate access and refresh tokens
-    const accessToken = this.app.jwt.sign(
-      { id: user.id, email: user.email },
-      { expiresIn: "1h" } // Access token expiration
-    );
-
-    const refreshToken = this.app.jwt.sign(
-      { id: user.id },
-      { expiresIn: "7d" } // Refresh token expiration
-    );
-
-    return { accessToken, refreshToken };
+    return this.issueTokens(user);
   }
 
-  /**
-   * Handles token refresh to issue a new access token.
-   */
-  async refreshToken(refreshToken: string) {
-    try {
-      // Verify the refresh token
-      const decoded = this.app.jwt.verify<{ id: number }>(refreshToken);
-
-      // Generate a new access token
-      const newAccessToken = this.app.jwt.sign(
-        { id: decoded.id },
-        { expiresIn: "1h" }
-      );
-
-      return newAccessToken;
-    } catch (err) {
-      throw new Error("Invalid or expired refresh token");
-    }
+  /** Idempotent: unknown or already revoked tokens are not an error (and not an oracle). */
+  async logout(refreshToken: string): Promise<void> {
+    await this.tokenRepository
+      .createQueryBuilder()
+      .update()
+      .set({ revokedAt: () => "now()" })
+      .where("token_hash = :tokenHash AND revoked_at IS NULL", {
+        tokenHash: hashRefreshToken(refreshToken),
+      })
+      .execute();
   }
 
-  /**
-   * Handles user logout by invalidating refresh tokens.
-   * This depends on your strategy (e.g., token revocation list, database cleanup).
-   */
-  async logout(refreshToken: string) {
-    // Example implementation: track invalid tokens (optional)
-    // In a real-world app, you might store invalidated tokens in a database or cache.
-
-    // For simplicity, we assume the logout is successful
-    return true;
+  private async revokeAllForUser(userId: number): Promise<void> {
+    await this.tokenRepository
+      .createQueryBuilder()
+      .update()
+      .set({ revokedAt: () => "now()" })
+      .where("user_id = :userId AND revoked_at IS NULL", { userId })
+      .execute();
   }
 
-  /**
-   * Handles user registration.
-   */
-  async register(name: string, email: string, password: string) {
-    // Check if the email is already registered
-    const existingUser = await this.userRepository.findOneBy({ email });
-    if (existingUser) {
-      throw new Error("User with this email already exists");
-    }
+  private async issueTokens(user: Pick<User, "id" | "tenantId" | "role">): Promise<TokenPair> {
+    const accessToken = this.app.jwt.sign({
+      sub: String(user.id),
+      tid: user.tenantId,
+      role: user.role,
+      typ: ACCESS_TOKEN_TYPE,
+    });
 
-    // Hash the password before storing
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const refreshToken = generateRefreshToken();
+    await this.tokenRepository.insert({
+      userId: user.id,
+      tokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+    });
 
-   
-
+    return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
+  }
+}
