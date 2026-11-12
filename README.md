@@ -25,10 +25,10 @@ The goal is a backend where tenants (merchants) issue gift cards and their staff
 ```
 src/
 ├── index.ts                 # Entry point: load config, connect DB, build app, listen, graceful shutdown
-├── app.ts                   # buildApp(): Fastify instance, plugins, routes (no listen, used by tests)
-├── config.ts                # Reads and validates all environment variables once
-├── data-source.ts           # TypeORM DataSource for the app (least-privileged app role)
-├── migration-data-source.ts # TypeORM DataSource for migrations (admin role)
+├── app.ts                   # buildApp({ config, dataSource }): Fastify instance, plugins, routes (no listen)
+├── config.ts                # loadConfig(env): validates environment variables (pure, no side effects on import)
+├── data-source.ts           # createDataSource(config, "app" | "admin"): DataSource factory
+├── migration-data-source.ts # Entry point for the TypeORM CLI (admin role)
 ├── migrations/              # Schema history; the source of truth for the database schema
 ├── entities/                # Tenant, User, RefreshToken
 ├── enums/roles.ts           # admin | staff
@@ -53,7 +53,7 @@ docker-compose.yml           # PostgreSQL, configured from .env
 .github/workflows/ci.yml     # CI pipeline
 ```
 
-Layering is **routes → services → TypeORM repositories**. The `DataSource` is exposed to services as a Fastify decorator (`fastify.db`).
+Layering is **routes → services → TypeORM repositories**. Configuration is loaded only by the entry points (`src/index.ts`, `src/migration-data-source.ts`, `src/scripts/`) and passed down explicitly. Importing any other module has no side effects, so tests can build apps with their own config. The `DataSource` is exposed to services as a Fastify decorator (`fastify.db`).
 
 ## Data model
 
@@ -230,7 +230,7 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 26 unit tests, 61 integration tests and the migration drift check._
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 27 unit tests, 62 integration tests and the migration drift check._
 
 ### Known limitations
 
@@ -256,8 +256,7 @@ _Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 26 
 3. Subdomain-based tenant resolution and per-tenant settings.
 4. User management endpoints (update role, deactivate, reset password), with session-aware access tokens so role changes and logout take effect immediately.
 5. Per-tenant emails with tenant-aware login. Per-account login throttling and a shared rate-limit store (e.g. Redis) for multiple instances. Pagination for list endpoints.
-6. API documentation (OpenAPI via `@fastify/swagger`).
-7. Tech debt: load config in `main()` and pass it to `createDataSource(config)` / `buildApp(config)` factories, instead of validating it when modules are imported. This would remove the lazy `import()`/`require()` workarounds in `src/index.ts`, the purge script and the test helpers.
+6. API documentation (OpenAPI via `@fastify/swagger`).
 
 ## Author
 

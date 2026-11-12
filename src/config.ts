@@ -1,5 +1,3 @@
-import "dotenv/config";
-
 export interface Config {
   // Interface the HTTP server binds to
   host: string;
@@ -148,5 +146,3 @@ export function loadConfig(env: Env): Readonly<Config> {
 
   return Object.freeze(config);
 }
-
-export const config: Readonly<Config> = loadConfig(process.env);

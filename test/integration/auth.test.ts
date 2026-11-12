@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import fastifyJwt from "@fastify/jwt";
+import Fastify from "fastify";
 import {
   PASSWORD,
   UUID_V7,
@@ -129,8 +131,8 @@ test("a validly signed JWT with typ refresh or without typ returns 401", async (
 
 test("a JWT signed with another secret returns 401", async () => {
   const s = await signupTenant(getApp(), "acme", "ada@acme.com");
-  const other = (await import("fastify")).default();
-  await other.register((await import("@fastify/jwt")).default, {
+  const other = Fastify();
+  await other.register(fastifyJwt, {
     secret: "a-completely-different-secret-of-sufficient-length",
   });
   await other.ready();

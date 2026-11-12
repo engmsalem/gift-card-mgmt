@@ -1,22 +1,24 @@
+import "dotenv/config";
 import "reflect-metadata";
+import { buildApp } from "./app";
+import { loadConfig } from "./config";
+import { createDataSource } from "./data-source";
 
 async function main() {
-  // Loaded lazily: importing config validates the environment and may throw a ConfigError,
-  // which must be caught below rather than surface as an uncaught module-load exception.
-  const { config } = await import("./config");
-  const { AppDataSource } = await import("./data-source");
-  const { buildApp } = await import("./app");
+  // Throws a ConfigError on a bad environment; handled by the catch below
+  const config = loadConfig(process.env);
+  const dataSource = createDataSource(config, "app");
 
-  await AppDataSource.initialize();
+  await dataSource.initialize();
   console.log("Database connected");
 
-  const app = await buildApp({ dataSource: AppDataSource });
+  const app = await buildApp({ config, dataSource });
 
   const shutdown = async (signal: string) => {
     app.log.info(`${signal} received, shutting down`);
     try {
       await app.close();
-      await AppDataSource.destroy();
+      await dataSource.destroy();
       process.exit(0);
     } catch (err) {
       app.log.error(err);

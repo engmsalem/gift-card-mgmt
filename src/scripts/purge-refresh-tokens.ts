@@ -1,5 +1,8 @@
+import "dotenv/config";
 import "reflect-metadata";
 import { DataSource } from "typeorm";
+import { loadConfig } from "../config";
+import { createDataSource } from "../data-source";
 import { RefreshToken } from "../entities/refresh-token";
 
 /**
@@ -18,14 +21,13 @@ export async function purgeExpiredRefreshTokens(dataSource: DataSource): Promise
 }
 
 async function main(): Promise<void> {
-  // Loaded lazily so a ConfigError surfaces through the handler below
-  const { AppDataSource } = await import("../data-source");
-  await AppDataSource.initialize();
+  const dataSource = createDataSource(loadConfig(process.env), "app");
+  await dataSource.initialize();
   try {
-    const purged = await purgeExpiredRefreshTokens(AppDataSource);
+    const purged = await purgeExpiredRefreshTokens(dataSource);
     console.log(`Purged ${purged} expired refresh tokens`);
   } finally {
-    await AppDataSource.destroy();
+    await dataSource.destroy();
   }
 }
 

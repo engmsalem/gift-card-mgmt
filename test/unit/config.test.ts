@@ -1,16 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { loadConfig } from "../../src/config";
 
-// config.ts validates process.env at import time, so provide a valid environment first.
 const validEnv = {
   DB_DATABASE: "gcm",
   DB_USERNAME: "app",
   DB_PASSWORD: "app-pass",
   JWT_SECRET: "x".repeat(32),
 };
-Object.assign(process.env, validEnv);
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- must load after env is set; a static import would validate env first
-const { loadConfig } = require("../../src/config") as typeof import("../../src/config");
 
 test("loadConfig applies defaults and falls back to app creds for admin", () => {
   const cfg = loadConfig(validEnv);
