@@ -1,18 +1,34 @@
 services:
-  mariadb:
-    image: mariadb:latest
-    restart: always
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    # Values come from the .env file in the project root (the same one the app reads).
+    # Compose requires both the admin and the app credentials, and the two usernames must differ
+    # (db/init/01-app-role.sh refuses to initialise otherwise). The app itself also accepts
+    # neither DB_ADMIN_* variable (single-user mode, e.g. CI without compose), but not just one.
+    # They are only applied the first time the volume is initialised.
     environment:
-      MYSQL_ROOT_PASSWORD: My-@giftCard_Password
-      MYSQL_USER: root
+      # Admin (schema owner) role, used by migrations
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:?Set DB_ADMIN_USERNAME in .env}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?Set DB_ADMIN_PASSWORD in .env}
+      POSTGRES_DB: ${DB_DATABASE:?Set DB_DATABASE in .env}
+      # Least-privileged role the app connects as (created by db/init/01-app-role.sh)
+      APP_DB_USER: ${DB_USERNAME:?Set DB_USERNAME in .env}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
-      - "secure_data:/var/lib/mysql"
+      # postgres 18+ keeps its data in a versioned subdirectory of /var/lib/postgresql
+      - postgres_data:/var/lib/postgresql
+      # Runs only when the data volume is first initialised
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    # TCP (-h 127.0.0.1), not the unix socket: the image's temporary init-phase server listens
+    # only on the socket, so a socket check can report healthy before db/init/*.sh has finished.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
 volumes:
-  secure_data:
-    driver: local
-    driver_opts:
-      type: none
-      device: D:\Programming\GiftCardManagement\giftcardmanagement_secure_data
-      o: bind
+  postgres_data:

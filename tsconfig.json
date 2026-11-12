@@ -17,6 +17,10 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true
   },
+  "ts-node": {
+    // Load src/types/*.d.ts so `npm run dev` sees the Fastify type augmentations
+    "files": true
+  },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "**/*.spec.ts"]
 }
