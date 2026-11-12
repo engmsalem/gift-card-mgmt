@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
-import type { Config } from "./config";
+import type { DbConfig } from "./config";
 import { RefreshToken } from "./entities/refresh-token";
 import { Tenant } from "./entities/tenant";
 import { User } from "./entities/user";
@@ -10,14 +10,17 @@ import { User } from "./entities/user";
  * least-privileged one (no DDL); "admin" is the schema-owning role used by migrations.
  * The schema is owned by src/migrations; synchronize is never enabled.
  */
-export function createDataSource(config: Config, role: "app" | "admin"): DataSource {
+export function createDataSource(config: DbConfig, role: "app" | "admin"): DataSource {
+  const credentials =
+    role === "admin"
+      ? { username: config.dbAdminUsername, password: config.dbAdminPassword }
+      : { username: config.dbUsername, password: config.dbPassword };
   return new DataSource({
     type: "postgres",
     host: config.dbHost,
     port: config.dbPort,
     database: config.dbDatabase,
-    username: role === "admin" ? config.dbAdminUsername : config.dbUsername,
-    password: role === "admin" ? config.dbAdminPassword : config.dbPassword,
+    ...credentials,
     synchronize: false,
     logging: config.dbLogging,
     entities: [Tenant, User, RefreshToken],

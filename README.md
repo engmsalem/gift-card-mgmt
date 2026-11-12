@@ -53,7 +53,7 @@ docker-compose.yml           # PostgreSQL, configured from .env
 .github/workflows/ci.yml     # CI pipeline
 ```
 
-Layering is **routes → services → TypeORM repositories**. Configuration is loaded only by the entry points (`src/index.ts`, `src/migration-data-source.ts`, `src/scripts/`) and passed down explicitly. Importing any other module has no side effects, so tests can build apps with their own config. The `DataSource` is exposed to services as a Fastify decorator (`fastify.db`).
+Layering is **routes → services → TypeORM repositories**. Configuration is loaded only by the entry points (`src/index.ts`, `src/migration-data-source.ts`, `src/scripts/`) and passed down explicitly. Importing any other module doesn't read the environment, load `.env` or open connections (the only global effect is the `reflect-metadata` polyfill TypeORM needs), so tests can build apps with their own config. The API entry point validates the full config (`loadConfig`). Migrations and the purge script only validate the database settings (`loadDbConfig`), so they don't need `JWT_SECRET` or `CORS_ORIGIN`. The `DataSource` is exposed to services as a Fastify decorator (`fastify.db`).
 
 ## Data model
 
@@ -230,7 +230,7 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 27 unit tests, 62 integration tests and the migration drift check._
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 30 unit tests, 62 integration tests and the migration drift check._
 
 ### Known limitations
 

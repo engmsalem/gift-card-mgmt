@@ -16,9 +16,35 @@ import { assertTestDatabase, resolveTestDatabase } from "../support/test-db";
 const testDb = resolveTestDatabase(process.env);
 assertTestDatabase(testDb, process.env);
 
-/** Config for the test database; `overrides` are extra env vars (e.g. CORS_ORIGIN). */
+// The only variables taken from the environment (after dotenv): connection credentials and the
+// JWT secret. Everything else is fixed below so a shell with NODE_ENV=production, TRUST_PROXY=true
+// or CORS_ORIGIN set cannot change what the tests exercise.
+const ENV_PASSTHROUGH = [
+  "DB_HOST",
+  "DB_PORT",
+  "DB_USERNAME",
+  "DB_PASSWORD",
+  "DB_ADMIN_USERNAME",
+  "DB_ADMIN_PASSWORD",
+  "JWT_SECRET",
+] as const;
+
+/**
+ * Config for the test database. Hermetic: only ENV_PASSTHROUGH comes from process.env.
+ * `overrides` are extra env vars (e.g. CORS_ORIGIN) applied last, except DB_DATABASE, which is
+ * always the test database.
+ */
 export function loadTestConfig(overrides: Record<string, string> = {}): Readonly<Config> {
-  return loadConfig({ ...process.env, ...overrides, DB_DATABASE: testDb });
+  const fromEnv: Record<string, string | undefined> = {};
+  for (const name of ENV_PASSTHROUGH) fromEnv[name] = process.env[name];
+  return loadConfig({
+    ...fromEnv,
+    NODE_ENV: "test",
+    DB_LOGGING: "false",
+    TRUST_PROXY: "false",
+    ...overrides,
+    DB_DATABASE: testDb,
+  });
 }
 
 const testConfig = loadTestConfig();

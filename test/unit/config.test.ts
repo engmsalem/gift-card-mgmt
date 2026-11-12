@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig } from "../../src/config";
+import { loadConfig, loadDbConfig, loadServerConfig } from "../../src/config";
 
 const validEnv = {
   DB_DATABASE: "gcm",
@@ -113,4 +113,44 @@ test("DB_ADMIN_* exactly one set is a ConfigError naming the missing one", () =>
     () => loadConfig({ ...validEnv, DB_ADMIN_USERNAME: "owner", DB_ADMIN_PASSWORD: "" }),
     /DB_ADMIN_PASSWORD is required/
   );
+});
+
+test("loadDbConfig needs only DB vars: no JWT_SECRET or CORS_ORIGIN even in production", () => {
+  const cfg = loadDbConfig({
+    NODE_ENV: "production",
+    DB_DATABASE: "gcm",
+    DB_USERNAME: "app",
+    DB_PASSWORD: "app-pass",
+    DB_ADMIN_USERNAME: "owner",
+    DB_ADMIN_PASSWORD: "owner-pass",
+  });
+  assert.equal(cfg.dbDatabase, "gcm");
+  assert.equal(cfg.dbAdminUsername, "owner");
+  assert.ok(Object.isFrozen(cfg));
+  assert.throws(() => loadDbConfig({}), (err: Error) => {
+    assert.match(err.message, /DB_DATABASE/);
+    assert.doesNotMatch(err.message, /JWT_SECRET|CORS_/);
+    return true;
+  });
+});
+
+test("loadServerConfig errors name only server vars", () => {
+  assert.throws(() => loadServerConfig({ NODE_ENV: "production" }), (err: Error) => {
+    assert.match(err.message, /JWT_SECRET/);
+    assert.match(err.message, /CORS_ORIGIN is required/);
+    assert.doesNotMatch(err.message, /DB_/);
+    return true;
+  });
+  const cfg = loadServerConfig({ JWT_SECRET: "x".repeat(32), PORT: "4000" });
+  assert.equal(cfg.port, 4000);
+  assert.equal(cfg.corsOrigin, "*");
+});
+
+test("loadConfig reports database and server problems together in one error", () => {
+  assert.throws(() => loadConfig({ NODE_ENV: "production", PORT: "abc" }), (err: Error) => {
+    for (const name of ["DB_DATABASE", "DB_USERNAME", "JWT_SECRET", "CORS_ORIGIN", "PORT"]) {
+      assert.match(err.message, new RegExp(name));
+    }
+    return true;
+  });
 });

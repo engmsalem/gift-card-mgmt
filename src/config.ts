@@ -1,7 +1,4 @@
-export interface Config {
-  // Interface the HTTP server binds to
-  host: string;
-  port: number;
+export interface DbConfig {
   nodeEnv: string;
   dbHost: string;
   dbPort: number;
@@ -14,6 +11,13 @@ export interface Config {
   dbAdminUsername: string;
   dbAdminPassword: string;
   dbLogging: boolean;
+}
+
+export interface ServerConfig {
+  nodeEnv: string;
+  // Interface the HTTP server binds to
+  host: string;
+  port: number;
   jwtSecret: string;
   // Set only behind a trusted reverse proxy: makes request.ip (and rate limiting) use X-Forwarded-For
   trustProxy: boolean;
@@ -22,6 +26,9 @@ export interface Config {
   corsMethods: string[];
   corsAllowedHeaders: string[];
 }
+
+// Everything the API process needs. Migrations and scripts need only DbConfig.
+export type Config = DbConfig & ServerConfig;
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -34,13 +41,8 @@ type Env = Record<string, string | undefined>;
 
 const MIN_JWT_SECRET_LENGTH = 32;
 
-/**
- * Reads and validates environment variables. Collects every problem and throws once,
- * naming each offending variable.
- */
-export function loadConfig(env: Env): Readonly<Config> {
-  const problems: string[] = [];
-
+/** Typed readers over one env that record every problem into a shared list. */
+function createReader(env: Env, problems: string[]) {
   const str = (name: string, fallback?: string): string => {
     const value = env[name];
     if (value !== undefined && value !== "") return value;
@@ -76,27 +78,14 @@ export function loadConfig(env: Env): Readonly<Config> {
     return raw.split(",").map((item) => item.trim()).filter(Boolean);
   };
 
-  const nodeEnv = str("NODE_ENV", "development");
+  return { str, int, bool, list };
+}
 
-  // No silent wildcard in production: the operator has to choose the allowed origins
-  if (nodeEnv === "production" && (env.CORS_ORIGIN === undefined || env.CORS_ORIGIN === "")) {
-    problems.push('CORS_ORIGIN is required when NODE_ENV is "production" (use "*" to allow any origin)');
-  }
-  const corsOrigins = list("CORS_ORIGIN", ["*"]);
-  if (corsOrigins.length === 0) problems.push("CORS_ORIGIN must contain at least one origin");
-  if (corsOrigins.length > 1 && corsOrigins.includes("*")) {
-    problems.push('CORS_ORIGIN "*" must be used alone, not mixed with other origins');
-  }
+type Reader = ReturnType<typeof createReader>;
 
-  const corsMethods = list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]);
-  if (corsMethods.length === 0) problems.push("CORS_METHODS must contain at least one method");
-  const corsAllowedHeaders = list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]);
-  if (corsAllowedHeaders.length === 0) {
-    problems.push("CORS_ALLOWED_HEADERS must contain at least one header");
-  }
-
-  const dbUsername = str("DB_USERNAME");
-  const dbPassword = str("DB_PASSWORD");
+function readDbConfig(env: Env, problems: string[], read: Reader): DbConfig {
+  const dbUsername = read.str("DB_USERNAME");
+  const dbPassword = read.str("DB_PASSWORD");
 
   // Admin credentials are a pair: both set, or both unset (then the app credentials are used)
   const adminUserSet = (env.DB_ADMIN_USERNAME ?? "") !== "";
@@ -109,6 +98,39 @@ export function loadConfig(env: Env): Readonly<Config> {
     );
   }
 
+  return {
+    nodeEnv: read.str("NODE_ENV", "development"),
+    dbHost: read.str("DB_HOST", "localhost"),
+    dbPort: read.int("DB_PORT", 5432),
+    dbDatabase: read.str("DB_DATABASE"),
+    dbUsername,
+    dbPassword,
+    dbAdminUsername: adminUserSet && adminPasswordSet ? read.str("DB_ADMIN_USERNAME") : dbUsername,
+    dbAdminPassword: adminPasswordSet && adminUserSet ? read.str("DB_ADMIN_PASSWORD") : dbPassword,
+    dbLogging: read.bool("DB_LOGGING", false),
+  };
+}
+
+function readServerConfig(env: Env, problems: string[], read: Reader): ServerConfig {
+  const nodeEnv = read.str("NODE_ENV", "development");
+
+  // No silent wildcard in production: the operator has to choose the allowed origins
+  if (nodeEnv === "production" && (env.CORS_ORIGIN === undefined || env.CORS_ORIGIN === "")) {
+    problems.push('CORS_ORIGIN is required when NODE_ENV is "production" (use "*" to allow any origin)');
+  }
+  const corsOrigins = read.list("CORS_ORIGIN", ["*"]);
+  if (corsOrigins.length === 0) problems.push("CORS_ORIGIN must contain at least one origin");
+  if (corsOrigins.length > 1 && corsOrigins.includes("*")) {
+    problems.push('CORS_ORIGIN "*" must be used alone, not mixed with other origins');
+  }
+
+  const corsMethods = read.list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]);
+  if (corsMethods.length === 0) problems.push("CORS_METHODS must contain at least one method");
+  const corsAllowedHeaders = read.list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]);
+  if (corsAllowedHeaders.length === 0) {
+    problems.push("CORS_ALLOWED_HEADERS must contain at least one header");
+  }
+
   let jwtSecret = env.JWT_SECRET ?? "";
   if (jwtSecret === "") {
     problems.push("JWT_SECRET is required");
@@ -119,30 +141,53 @@ export function loadConfig(env: Env): Readonly<Config> {
     jwtSecret = "";
   }
 
-  const config: Config = {
-    host: str("HOST", "localhost"),
-    port: int("PORT", 3000),
+  return {
     nodeEnv,
-    dbHost: str("DB_HOST", "localhost"),
-    dbPort: int("DB_PORT", 5432),
-    dbDatabase: str("DB_DATABASE"),
-    dbUsername,
-    dbPassword,
-    dbAdminUsername: adminUserSet && adminPasswordSet ? str("DB_ADMIN_USERNAME") : dbUsername,
-    dbAdminPassword: adminUserSet && adminPasswordSet ? str("DB_ADMIN_PASSWORD") : dbPassword,
-    dbLogging: bool("DB_LOGGING", false),
+    host: read.str("HOST", "localhost"),
+    port: read.int("PORT", 3000),
     jwtSecret,
-    trustProxy: bool("TRUST_PROXY", false),
+    trustProxy: read.bool("TRUST_PROXY", false),
     corsOrigin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
     corsMethods,
     corsAllowedHeaders,
   };
+}
 
+function throwIfProblems(problems: string[]): void {
   if (problems.length > 0) {
     throw new ConfigError(
       `Invalid configuration (see .env.example):\n${problems.map((p) => `  - ${p}`).join("\n")}`
     );
   }
+}
 
+/**
+ * Database settings only (migrations, scripts): needs no API secrets such as JWT_SECRET or
+ * CORS_ORIGIN. Collects every problem and throws once, naming each offending variable.
+ */
+export function loadDbConfig(env: Env): Readonly<DbConfig> {
+  const problems: string[] = [];
+  const config = readDbConfig(env, problems, createReader(env, problems));
+  throwIfProblems(problems);
+  return Object.freeze(config);
+}
+
+/** HTTP server settings only. Collects every problem and throws once. */
+export function loadServerConfig(env: Env): Readonly<ServerConfig> {
+  const problems: string[] = [];
+  const config = readServerConfig(env, problems, createReader(env, problems));
+  throwIfProblems(problems);
+  return Object.freeze(config);
+}
+
+/**
+ * Full configuration for the API process: database and server settings, validated together
+ * so one ConfigError lists every problem.
+ */
+export function loadConfig(env: Env): Readonly<Config> {
+  const problems: string[] = [];
+  const read = createReader(env, problems);
+  const config: Config = { ...readDbConfig(env, problems, read), ...readServerConfig(env, problems, read) };
+  throwIfProblems(problems);
   return Object.freeze(config);
 }
