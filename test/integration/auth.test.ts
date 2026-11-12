@@ -384,3 +384,12 @@ test("logout with an unknown token is 204", async () => {
   });
   assert.equal(res.statusCode, 204);
 });
+
+test("a non-string refreshToken is rejected, not coerced", async () => {
+  const res = await send(getApp(), {
+    method: "POST",
+    url: "/auth/refresh",
+    payload: { refreshToken: 123 },
+  });
+  assert.equal(res.statusCode, 400);
+});

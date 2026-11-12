@@ -11,7 +11,7 @@ declare module "@fastify/jwt" {
     // Access token claims
     payload: { sub: string; tid: string; role: Role; typ: string };
     // `request.user` after `request.jwtVerify()` (built by formatUser in src/plugins/jwt.ts)
-    user: { id: string; tenantId: string; role: Role };
+    user: { id: string; tenantId: string; role: Role; typ: string };
   }
 }
 

@@ -85,6 +85,9 @@ export function loadConfig(env: Env): Readonly<Config> {
   }
   const corsOrigins = list("CORS_ORIGIN", ["*"]);
   if (corsOrigins.length === 0) problems.push("CORS_ORIGIN must contain at least one origin");
+  if (corsOrigins.length > 1 && corsOrigins.includes("*")) {
+    problems.push('CORS_ORIGIN "*" must be used alone, not mixed with other origins');
+  }
 
   const corsMethods = list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]);
   if (corsMethods.length === 0) problems.push("CORS_METHODS must contain at least one method");

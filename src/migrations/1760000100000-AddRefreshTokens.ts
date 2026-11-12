@@ -22,6 +22,10 @@ export class AddRefreshTokens1760000100000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE INDEX "refresh_tokens_user_id_idx" ON "refresh_tokens" ("user_id")`
     );
+    // Serves the expired-token purge (src/scripts/purge-refresh-tokens.ts)
+    await queryRunner.query(
+      `CREATE INDEX "refresh_tokens_expires_at_idx" ON "refresh_tokens" ("expires_at")`
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

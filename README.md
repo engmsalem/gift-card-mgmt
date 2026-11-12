@@ -230,7 +230,7 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 21 unit tests, 54 integration tests and the migration drift check._
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 22 unit tests, 57 integration tests and the migration drift check._
 
 ### Known limitations
 
@@ -240,6 +240,8 @@ _Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 21 
 - **Access tokens are stateless.** They stay valid for up to 15 minutes after logout or theft detection, and a demoted admin keeps admin rights until their access token expires. Role changes apply on the next refresh.
 - **Rate limits are per IP and in memory.** There is no per-account login throttling, and counters aren't shared between server instances. Set `TRUST_PROXY=true` behind a proxy, or every client shares one limit.
 - `GET /users` has no pagination.
+- **A refresh retried more than 10 seconds after a lost response logs the user out everywhere.** For example, the server rotated the token but the response never reached a mobile client. That retry is indistinguishable from a stolen token being replayed, and this is the standard trade-off of refresh-token rotation with reuse detection. Clients should retry failed refreshes promptly (within 10 seconds) or send the user to log in again.
+- Request validation is strict: wrong types are rejected rather than coerced (a numeric `password` gets `400`). Future querystring or params schemas must parse numbers and booleans themselves.
 - **Gift card PINs are stored as plain text** in the schema. A 6-digit PIN can't simply be bcrypt-hashed (only a million combinations, so it's quick to brute-force offline). Decide on a keyed hash (HMAC with a server-side secret) or encryption when the gift card feature is built, before any real cards are stored.
 
 ### Security notes
@@ -255,6 +257,7 @@ _Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 21 
 4. User management endpoints (update role, deactivate, reset password), with session-aware access tokens so role changes and logout take effect immediately.
 5. Per-tenant emails with tenant-aware login. Per-account login throttling and a shared rate-limit store (e.g. Redis) for multiple instances. Pagination for list endpoints.
 6. API documentation (OpenAPI via `@fastify/swagger`).
+7. Tech debt: load config in `main()` and pass it to `createDataSource(config)` / `buildApp(config)` factories, instead of validating it when modules are imported. This would remove the lazy `import()`/`require()` workarounds in `src/index.ts`, the purge script and the test helpers.
 
 ## Author
 

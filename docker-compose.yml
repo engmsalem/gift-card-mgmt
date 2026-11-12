@@ -19,8 +19,10 @@ services:
       - postgres_data:/var/lib/postgresql
       # Runs only when the data volume is first initialised
       - ./db/init:/docker-entrypoint-initdb.d:ro
+    # TCP (-h 127.0.0.1), not the unix socket: the image's temporary init-phase server listens
+    # only on the socket, so a socket check can report healthy before db/init/*.sh has finished.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 20

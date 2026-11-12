@@ -195,3 +195,12 @@ test("signup is rate limited to 5 per minute", async () => {
   }
   assert.deepEqual(statuses, [201, 201, 201, 201, 201, 429]);
 });
+
+test("a numeric tenant name is rejected, not coerced to a string", async () => {
+  const res = await send(getApp(), {
+    method: "POST",
+    url: "/tenants",
+    payload: signupPayload({ tenant: { name: 12345 } }),
+  });
+  assert.equal(res.statusCode, 400);
+});

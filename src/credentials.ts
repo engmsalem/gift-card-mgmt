@@ -22,6 +22,17 @@ export function assertPasswordFitsBcrypt(password: string): void {
   }
 }
 
+/**
+ * Validates signup credentials and returns the normalized email to store and look up.
+ * Hashing is separate (hashPassword) so callers can run cheap conflict checks first.
+ */
+export function prepareCredentials(email: string, password: string): string {
+  const normalized = normalizeEmail(email);
+  assertValidEmail(normalized);
+  assertPasswordFitsBcrypt(password);
+  return normalized;
+}
+
 export function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, BCRYPT_COST);
 }

@@ -4,7 +4,7 @@ import { Tenant } from "../entities/tenant";
 import { User } from "../entities/user";
 import { Role } from "../enums/roles";
 import { ConflictError } from "../errors";
-import { assertPasswordFitsBcrypt, assertValidEmail, hashPassword, normalizeEmail } from "../credentials";
+import { hashPassword, prepareCredentials } from "../credentials";
 
 export interface CreateTenantInput {
   tenant: { name: string; subdomain: string };
@@ -16,9 +16,7 @@ export class TenantService {
 
   /** Creates a tenant and its first admin user atomically. */
   async createTenant(input: CreateTenantInput) {
-    const email = normalizeEmail(input.admin.email);
-    assertValidEmail(email);
-    assertPasswordFitsBcrypt(input.admin.password);
+    const email = prepareCredentials(input.admin.email, input.admin.password);
 
     // Cheap reads first, so a doomed signup never pays for bcrypt. The checks are repeated
     // inside the transaction (and the unique constraints back them) to cover races.

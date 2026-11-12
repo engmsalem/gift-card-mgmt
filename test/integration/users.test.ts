@@ -199,3 +199,19 @@ test("a token can not reach another tenant's user", async () => {
   const listA = await send(getApp(), { method: "GET", url: "/users", headers: bearer(adminA.accessToken) });
   assert.deepEqual(listA.json<UserDto[]>().map((u) => u.email), ["ada@acme.com"]);
 });
+
+test("wrong-typed body fields are rejected, not coerced", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const { accessToken } = await login(getApp(), s.email);
+  const base = { name: "Sam", email: "sam@acme.com", password: PASSWORD };
+
+  for (const override of [{ password: 12345678 }, { email: ["sam@acme.com"] }]) {
+    const res = await send(getApp(), {
+      method: "POST",
+      url: "/users",
+      headers: bearer(accessToken),
+      payload: { ...base, ...override },
+    });
+    assert.equal(res.statusCode, 400, JSON.stringify(override));
+  }
+});

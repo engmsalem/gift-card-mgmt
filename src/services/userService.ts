@@ -3,7 +3,7 @@ import { Repository } from "typeorm";
 import { User } from "../entities/user";
 import { Role } from "../enums/roles";
 import { ConflictError, NotFoundError } from "../errors";
-import { assertPasswordFitsBcrypt, assertValidEmail, hashPassword, normalizeEmail } from "../credentials";
+import { hashPassword, prepareCredentials } from "../credentials";
 
 export interface CreateUserInput {
   name: string;
@@ -21,9 +21,7 @@ export class UserService {
 
   /** The tenant always comes from the caller's token, never from the request body. */
   async createUser(tenantId: string, input: CreateUserInput) {
-    const email = normalizeEmail(input.email);
-    assertValidEmail(email);
-    assertPasswordFitsBcrypt(input.password);
+    const email = prepareCredentials(input.email, input.password);
 
     if (await this.userRepository.existsBy({ email })) {
       throw new ConflictError("Email already registered");

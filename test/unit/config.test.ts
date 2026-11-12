@@ -78,3 +78,11 @@ test("CORS_METHODS and CORS_ALLOWED_HEADERS must not parse to an empty list", ()
   }
   assert.deepEqual(loadConfig({ ...validEnv, CORS_METHODS: "GET, PATCH" }).corsMethods, ["GET", "PATCH"]);
 });
+
+test("CORS_ORIGIN: * must be used alone", () => {
+  assert.throws(
+    () => loadConfig({ ...validEnv, CORS_ORIGIN: "*, https://a.example" }),
+    /CORS_ORIGIN "\*" must be used alone/
+  );
+  assert.equal(loadConfig({ ...validEnv, CORS_ORIGIN: "*" }).corsOrigin, "*");
+});

@@ -18,6 +18,7 @@ export default fp(async function (fastify: FastifyInstance) {
       id: payload.sub,
       tenantId: payload.tid,
       role: payload.role,
+      typ: payload.typ,
     }),
   });
 
@@ -27,9 +28,8 @@ export default fp(async function (fastify: FastifyInstance) {
     } catch {
       throw new UnauthorizedError("Invalid or missing token");
     }
-    // formatUser drops claims, so read `typ` from the (already verified) token
-    const { typ } = await request.jwtDecode<{ typ?: string }>();
-    if (typ !== ACCESS_TOKEN_TYPE) {
+    // A validly signed refresh (or typ-less) JWT must not work as an access token
+    if (request.user.typ !== ACCESS_TOKEN_TYPE) {
       throw new UnauthorizedError("Invalid or missing token");
     }
   });
