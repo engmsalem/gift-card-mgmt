@@ -26,7 +26,7 @@ async function main() {
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
-  await app.listen({ port: config.port });
+  await app.listen({ host: config.host, port: config.port });
 }
 
 main().catch((err) => {

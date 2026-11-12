@@ -87,6 +87,7 @@ Both the app and `docker-compose.yml` read this file.
 
 | Variable               | Required | Default                      | Notes |
 | ---------------------- | -------- | ---------------------------- | ----- |
+| `HOST`                 | no       | `localhost`                  | Interface to listen on. Use `0.0.0.0` in Docker or production so the server is reachable from outside the container/host |
 | `PORT`                 | no       | `3000`                       | HTTP port the API listens on |
 | `NODE_ENV`             | no       | `development`                | `production` lowers log verbosity |
 | `DB_HOST`              | no       | `localhost`                  | |
@@ -98,7 +99,7 @@ Both the app and `docker-compose.yml` read this file.
 | `DB_ADMIN_PASSWORD`    | yes\*    | `DB_PASSWORD`                | Password for the admin role |
 | `JWT_SECRET`           | yes      | none                         | At least 32 characters. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement |
-| `CORS_ORIGIN`          | no       | `*`                          | One origin, or a comma-separated list |
+| `CORS_ORIGIN`          | no*     | `*`                          | One origin, or a comma-separated list. *Required when `NODE_ENV=production` (set `*` explicitly to allow any origin) |
 | `TRUST_PROXY`          | no       | `false`                      | Set to `true` behind a reverse proxy / load balancer so rate limits use the real client IP (`X-Forwarded-For`). Leave `false` otherwise: clients could spoof their IP |
 | `CORS_METHODS`         | no       | `GET,POST,PUT,DELETE`        | Comma-separated |
 | `CORS_ALLOWED_HEADERS` | no       | `Content-Type,Authorization` | Comma-separated |
@@ -184,7 +185,7 @@ Rules:
 ### Tokens
 
 - **Access token:** a JWT (HS256, signed with `JWT_SECRET`), valid for **15 minutes**, with claims `sub` (user UUID), `tid` (tenant UUID), `role` and `typ: "access"`. Send it as `Authorization: Bearer <token>`.
-- **Refresh token:** a random opaque string, valid for **7 days**. Only its SHA-256 hash is stored. Each refresh **rotates** it: the old one is revoked and a new pair is returned. Rotation is atomic: if issuing the new pair fails, the old token stays valid. Presenting a refresh token that was revoked **more than 10 seconds ago** is treated as theft, and **all** of that user's refresh tokens are revoked, forcing a new login. Within those 10 seconds (two tabs or a client retry racing on the same token) the request just gets `401`. Expired rows are deleted whenever the user gets new tokens.
+- **Refresh token:** a random opaque string, valid for **7 days**. Only its SHA-256 hash is stored. Each refresh **rotates** it: the old one is revoked and a new pair is returned. Rotation is atomic: if issuing the new pair fails, the old token stays valid. Every revocation records a reason (`rotated`, `logout`, `reuse`, `evicted`). Presenting a token that was **rotated** more than **10 seconds** ago is treated as theft, and **all** of that user's refresh tokens are revoked, forcing a new login. Within those 10 seconds (two tabs or a client retry racing on the same token), or for a token revoked by logout or eviction, the request just gets `401`. A user can have at most **10** active refresh tokens (sessions). Logging in again revokes the oldest.
 - Access tokens can't be revoked early. After logout they stay valid until they expire (at most 15 minutes).
 
 ## Database migrations
@@ -198,6 +199,13 @@ npm run migration:show                                  # list applied / pending
 npm run migration:generate -- src/migrations/AddXyz     # write a migration from entity changes
 npm run migration:check                                 # fail if entities and schema differ
 npm run migration:run:prod                              # apply using the compiled dist/ files
+```
+
+Expired refresh tokens are deleted automatically for users who log in or refresh. To clean up rows of users who never return, run the purge script periodically (e.g. a daily cron job or scheduled task):
+
+```bash
+npm run tokens:purge          # ts-node
+npm run tokens:purge:prod     # compiled dist/ files
 ```
 
 To change the schema: edit the entity, run `migration:generate`, review the generated SQL, run `migration:run`, and commit the migration together with the code. Don't edit a migration that has already been applied anywhere that matters. Add a new one instead.
@@ -222,14 +230,16 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 18 unit tests, 50 integration tests and the migration drift check._
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 21 unit tests, 54 integration tests and the migration drift check._
 
 ### Known limitations
 
 - **No gift card features yet.** `gift_cards`, `transactions` and `audit_logs` exist in the schema only.
 - **No subdomain routing.** Tenants have a `subdomain`, but requests aren't resolved by `Host` header yet. The tenant comes from the access token.
-- Emails are unique across all tenants, so one person can't belong to two tenants with the same email.
-- Access tokens stay valid for up to 15 minutes after logout. Expired refresh-token rows are only removed when that user next logs in or refreshes, so rows of inactive users remain until a periodic cleanup job exists.
+- **Emails are unique across all tenants.** One person can't belong to two tenants with the same email, and a `409 Email already registered` on `POST /users` or `POST /tenants` reveals that an address exists in *some* tenant. Fixing this needs per-tenant emails and a tenant-aware login (e.g. by subdomain).
+- **Access tokens are stateless.** They stay valid for up to 15 minutes after logout or theft detection, and a demoted admin keeps admin rights until their access token expires. Role changes apply on the next refresh.
+- **Rate limits are per IP and in memory.** There is no per-account login throttling, and counters aren't shared between server instances. Set `TRUST_PROXY=true` behind a proxy, or every client shares one limit.
+- `GET /users` has no pagination.
 - **Gift card PINs are stored as plain text** in the schema. A 6-digit PIN can't simply be bcrypt-hashed (only a million combinations, so it's quick to brute-force offline). Decide on a keyed hash (HMAC with a server-side secret) or encryption when the gift card feature is built, before any real cards are stored.
 
 ### Security notes
@@ -242,8 +252,9 @@ _Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 18 
 1. Gift cards: entities and endpoints to issue cards, check balances, redeem and refund, with transactional balance updates (`SELECT ... FOR UPDATE`) and a transaction history.
 2. Audit logging for sensitive actions.
 3. Subdomain-based tenant resolution and per-tenant settings.
-4. Cleanup job for expired refresh tokens. User management endpoints (update role, deactivate, reset password).
-5. Stricter rate limits on public endpoints, and API documentation (OpenAPI via `@fastify/swagger`).
+4. User management endpoints (update role, deactivate, reset password), with session-aware access tokens so role changes and logout take effect immediately.
+5. Per-tenant emails with tenant-aware login. Per-account login throttling and a shared rate-limit store (e.g. Redis) for multiple instances. Pagination for list endpoints.
+6. API documentation (OpenAPI via `@fastify/swagger`).
 
 ## Author
 

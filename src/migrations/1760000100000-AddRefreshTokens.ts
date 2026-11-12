@@ -11,7 +11,12 @@ export class AddRefreshTokens1760000100000 implements MigrationInterface {
         "token_hash"  char(64)    NOT NULL UNIQUE,
         "expires_at"  timestamptz NOT NULL,
         "revoked_at"  timestamptz,
-        "created_at"  timestamptz NOT NULL DEFAULT now()
+        "revoke_reason" varchar(16),
+        "created_at"  timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT "refresh_tokens_revoke_reason_check"
+          CHECK ("revoke_reason" IN ('rotated', 'logout', 'reuse', 'evicted')),
+        CONSTRAINT "refresh_tokens_revoked_reason_pair_check"
+          CHECK (("revoked_at" IS NULL) = ("revoke_reason" IS NULL))
       )
     `);
     await queryRunner.query(

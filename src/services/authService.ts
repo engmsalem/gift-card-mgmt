@@ -2,13 +2,14 @@ import { FastifyInstance } from "fastify";
 import bcrypt from "bcrypt";
 import { randomBytes } from "crypto";
 import { EntityManager, ObjectLiteral, Repository } from "typeorm";
-import { RefreshToken } from "../entities/refresh-token";
+import { RefreshToken, RevokeReason } from "../entities/refresh-token";
 import { User } from "../entities/user";
 import { UnauthorizedError } from "../errors";
 import { BCRYPT_COST, normalizeEmail } from "../credentials";
 import { ACCESS_TOKEN_TYPE } from "../plugins/jwt";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
+  MAX_ACTIVE_REFRESH_TOKENS,
   REFRESH_TOKEN_EXPIRES_AT_SQL,
   generateRefreshToken,
   hashRefreshToken,
@@ -16,8 +17,9 @@ import {
 
 // Hash of a throwaway string, computed once with the same cost as real hashes. Compared
 // against when the email is unknown so that unknown-email and wrong-password logins take
-// the same time (and keep doing so if BCRYPT_COST changes).
-const DUMMY_HASH = bcrypt.hashSync(randomBytes(16).toString("hex"), BCRYPT_COST);
+// the same time (and keep doing so if BCRYPT_COST changes). Started at import with the async
+// hash, so it runs in the libuv threadpool rather than blocking the event loop at startup.
+const DUMMY_HASH: Promise<string> = bcrypt.hash(randomBytes(16).toString("hex"), BCRYPT_COST);
 
 // A rotated token presented again within this window is a benign race (two tabs, a client
 // retry) and is only rejected; after it, reuse is treated as theft.
@@ -45,7 +47,7 @@ export class AuthService {
       select: { id: true, tenantId: true, role: true, passwordHash: true },
     });
 
-    const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+    const valid = await bcrypt.compare(password, user?.passwordHash ?? (await DUMMY_HASH));
     if (!user || !valid) {
       throw new UnauthorizedError("Invalid email or password");
     }
@@ -55,8 +57,9 @@ export class AuthService {
   /**
    * Rotates a refresh token. Revoking the presented token, reading the user and issuing the
    * new pair happen in one transaction, so a failure leaves the old token usable. Presenting
-   * a token revoked longer ago than the grace window is treated as theft and revokes all of
-   * the user's tokens (committed, then rejected).
+   * a token that was rotated longer ago than the grace window is treated as theft and revokes
+   * all of the user's tokens (committed, then rejected). Tokens revoked for any other reason
+   * (logout, eviction, an earlier theft response) or expired are only rejected.
    */
   async refresh(refreshToken: string): Promise<TokenPair> {
     const tokenHash = hashRefreshToken(refreshToken);
@@ -65,6 +68,7 @@ export class AuthService {
       const rows = await this.revoke(
         "token_hash = :tokenHash AND revoked_at IS NULL AND expires_at > now()",
         { tokenHash },
+        "rotated",
         em
       );
 
@@ -73,9 +77,11 @@ export class AuthService {
           `revoked_at IS NULL AND user_id IN (
              SELECT user_id FROM refresh_tokens
              WHERE token_hash = :tokenHash
+               AND revoke_reason = 'rotated'
                AND revoked_at < now() - interval '${REFRESH_REUSE_GRACE_SECONDS} seconds'
            )`,
           { tokenHash },
+          "reuse",
           em
         );
         return null;
@@ -92,21 +98,24 @@ export class AuthService {
 
   /** Idempotent: unknown or already revoked tokens are not an error (and not an oracle). */
   async logout(refreshToken: string): Promise<void> {
-    await this.revoke("token_hash = :tokenHash AND revoked_at IS NULL", {
-      tokenHash: hashRefreshToken(refreshToken),
-    });
+    await this.revoke(
+      "token_hash = :tokenHash AND revoked_at IS NULL",
+      { tokenHash: hashRefreshToken(refreshToken) },
+      "logout"
+    );
   }
 
   /** Marks matching, still-active tokens revoked; returns the affected rows' user ids. */
   private async revoke(
     where: string,
     params: ObjectLiteral,
+    reason: RevokeReason,
     em: EntityManager = this.app.db.manager
   ): Promise<{ user_id: string }[]> {
     const result = await em
       .createQueryBuilder()
       .update(RefreshToken)
-      .set({ revokedAt: () => "now()" })
+      .set({ revokedAt: () => "now()", revokeReason: reason })
       .where(where, params)
       .returning("user_id")
       .execute();
@@ -139,6 +148,20 @@ export class AuthService {
       tokenHash: hashRefreshToken(refreshToken),
       expiresAt: () => REFRESH_TOKEN_EXPIRES_AT_SQL,
     });
+
+    // Cap concurrent sessions: evict the user's oldest active tokens beyond the limit. Evicted
+    // tokens are rejected like any logged-out token and do not trigger theft handling.
+    await this.revoke(
+      `id IN (
+         SELECT id FROM refresh_tokens
+         WHERE user_id = :userId AND revoked_at IS NULL AND expires_at > now()
+         ORDER BY created_at DESC, id DESC
+         OFFSET ${MAX_ACTIVE_REFRESH_TOKENS}
+       )`,
+      { userId: user.id },
+      "evicted",
+      em
+    );
 
     return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
   }

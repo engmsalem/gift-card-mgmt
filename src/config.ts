@@ -1,6 +1,8 @@
 import "dotenv/config";
 
 export interface Config {
+  // Interface the HTTP server binds to
+  host: string;
   port: number;
   nodeEnv: string;
   dbHost: string;
@@ -75,8 +77,21 @@ export function loadConfig(env: Env): Readonly<Config> {
     return raw.split(",").map((item) => item.trim()).filter(Boolean);
   };
 
+  const nodeEnv = str("NODE_ENV", "development");
+
+  // No silent wildcard in production: the operator has to choose the allowed origins
+  if (nodeEnv === "production" && (env.CORS_ORIGIN === undefined || env.CORS_ORIGIN === "")) {
+    problems.push('CORS_ORIGIN is required when NODE_ENV is "production" (use "*" to allow any origin)');
+  }
   const corsOrigins = list("CORS_ORIGIN", ["*"]);
   if (corsOrigins.length === 0) problems.push("CORS_ORIGIN must contain at least one origin");
+
+  const corsMethods = list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]);
+  if (corsMethods.length === 0) problems.push("CORS_METHODS must contain at least one method");
+  const corsAllowedHeaders = list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]);
+  if (corsAllowedHeaders.length === 0) {
+    problems.push("CORS_ALLOWED_HEADERS must contain at least one header");
+  }
 
   const dbUsername = str("DB_USERNAME");
   const dbPassword = str("DB_PASSWORD");
@@ -92,8 +107,9 @@ export function loadConfig(env: Env): Readonly<Config> {
   }
 
   const config: Config = {
+    host: str("HOST", "localhost"),
     port: int("PORT", 3000),
-    nodeEnv: str("NODE_ENV", "development"),
+    nodeEnv,
     dbHost: str("DB_HOST", "localhost"),
     dbPort: int("DB_PORT", 5432),
     dbDatabase: str("DB_DATABASE"),
@@ -105,8 +121,8 @@ export function loadConfig(env: Env): Readonly<Config> {
     jwtSecret,
     trustProxy: bool("TRUST_PROXY", false),
     corsOrigin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
-    corsMethods: list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]),
-    corsAllowedHeaders: list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]),
+    corsMethods,
+    corsAllowedHeaders,
   };
 
   if (problems.length > 0) {

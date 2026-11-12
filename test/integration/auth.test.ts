@@ -5,6 +5,7 @@ import {
   UUID_V7,
   adminQuery,
   bearer,
+  buildTestApp,
   login,
   send,
   signupTenant,
@@ -198,6 +199,73 @@ test("reusing a rotated refresh token after the grace window is rejected and rev
 
   assert.equal((await refreshWith(first.refreshToken)).statusCode, 401);
   assert.equal((await refreshWith(rotated.refreshToken)).statusCode, 401);
+
+  const reasons = (await adminQuery(
+    "SELECT revoke_reason FROM refresh_tokens ORDER BY created_at"
+  )) as { revoke_reason: string }[];
+  assert.deepEqual(reasons.map((r) => r.revoke_reason), ["rotated", "reuse"]);
+});
+
+test("revoke reasons are persisted: rotated, logout, and NULL while active", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const a = await login(getApp(), s.email);
+  const b = await login(getApp(), s.email);
+  const rotated = (await refreshWith(a.refreshToken)).json<Tokens>();
+  await send(getApp(), {
+    method: "POST",
+    url: "/auth/logout",
+    payload: { refreshToken: b.refreshToken },
+  });
+
+  const rows = (await adminQuery(
+    "SELECT token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex') AS is_new, revoke_reason FROM refresh_tokens ORDER BY created_at",
+    [rotated.refreshToken]
+  )) as { is_new: boolean; revoke_reason: string | null }[];
+  assert.deepEqual(rows.map((r) => r.revoke_reason), ["rotated", "logout", null]);
+  assert.equal(rows[2].is_new, true);
+});
+
+test("a logged-out token presented after the grace window is rejected without revoking other devices", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const deviceA = await login(getApp(), s.email);
+  const deviceB = await login(getApp(), s.email);
+  await send(getApp(), {
+    method: "POST",
+    url: "/auth/logout",
+    payload: { refreshToken: deviceA.refreshToken },
+  });
+  await adminQuery(
+    "UPDATE refresh_tokens SET revoked_at = now() - interval '1 minute' WHERE revoked_at IS NOT NULL"
+  );
+
+  assert.equal((await refreshWith(deviceA.refreshToken)).statusCode, 401);
+  assert.equal((await refreshWith(deviceB.refreshToken)).statusCode, 200);
+});
+
+test("the oldest active refresh tokens beyond the cap are evicted without triggering theft handling", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const logins: Tokens[] = [];
+  // A fresh app per login: login is rate limited to 10 per minute per app instance
+  for (let i = 0; i < 11; i++) {
+    const app = await buildTestApp();
+    try {
+      logins.push(await login(app, s.email));
+    } finally {
+      await app.close();
+    }
+  }
+
+  const counts = (await adminQuery(
+    "SELECT count(*) FILTER (WHERE revoked_at IS NULL)::int AS active, count(*) FILTER (WHERE revoke_reason = 'evicted')::int AS evicted FROM refresh_tokens"
+  )) as { active: number; evicted: number }[];
+  assert.deepEqual(counts[0], { active: 10, evicted: 1 });
+
+  await adminQuery(
+    "UPDATE refresh_tokens SET revoked_at = now() - interval '1 minute' WHERE revoked_at IS NOT NULL"
+  );
+  assert.equal((await refreshWith(logins[0].refreshToken)).statusCode, 401);
+  assert.equal((await refreshWith(logins[1].refreshToken)).statusCode, 200);
+  assert.equal((await refreshWith(logins[10].refreshToken)).statusCode, 200);
 });
 
 test("a failure while issuing the new pair rolls the revocation back", async () => {

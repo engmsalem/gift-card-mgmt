@@ -12,6 +12,8 @@
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/migration-data-source.ts",
     "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/migration-data-source.ts",
     "migration:show": "typeorm-ts-node-commonjs migration:show -d src/migration-data-source.ts",
+    "tokens:purge": "ts-node src/scripts/purge-refresh-tokens.ts",
+    "tokens:purge:prod": "node dist/scripts/purge-refresh-tokens.js",
     "migration:run:prod": "typeorm migration:run -d dist/migration-data-source.js",
     "test": "node --no-experimental-strip-types --require ts-node/register/transpile-only --test \"test/unit/**/*.test.ts\"",
     "test:integration": "node --no-experimental-strip-types --require ts-node/register/transpile-only --test --test-concurrency=1 \"test/integration/**/*.test.ts\"",

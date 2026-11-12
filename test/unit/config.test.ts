@@ -54,3 +54,27 @@ test("CORS_ORIGIN: one value stays a string, several become a trimmed list", () 
   );
   assert.throws(() => loadConfig({ ...validEnv, CORS_ORIGIN: " , " }), /CORS_ORIGIN must contain/);
 });
+
+test("HOST defaults to localhost and can be overridden", () => {
+  assert.equal(loadConfig(validEnv).host, "localhost");
+  assert.equal(loadConfig({ ...validEnv, HOST: "0.0.0.0" }).host, "0.0.0.0");
+});
+
+test("in production CORS_ORIGIN must be set explicitly; elsewhere it defaults to *", () => {
+  const prod = { ...validEnv, NODE_ENV: "production" };
+  assert.throws(() => loadConfig(prod), /CORS_ORIGIN is required/);
+  assert.throws(() => loadConfig({ ...prod, CORS_ORIGIN: "" }), /CORS_ORIGIN is required/);
+  assert.equal(loadConfig({ ...prod, CORS_ORIGIN: "https://a.example" }).corsOrigin, "https://a.example");
+  assert.equal(loadConfig({ ...validEnv, NODE_ENV: "test" }).corsOrigin, "*");
+});
+
+test("CORS_METHODS and CORS_ALLOWED_HEADERS must not parse to an empty list", () => {
+  for (const raw of [",", " , "]) {
+    assert.throws(() => loadConfig({ ...validEnv, CORS_METHODS: raw }), /CORS_METHODS must contain/);
+    assert.throws(
+      () => loadConfig({ ...validEnv, CORS_ALLOWED_HEADERS: raw }),
+      /CORS_ALLOWED_HEADERS must contain/
+    );
+  }
+  assert.deepEqual(loadConfig({ ...validEnv, CORS_METHODS: "GET, PATCH" }).corsMethods, ["GET", "PATCH"]);
+});
