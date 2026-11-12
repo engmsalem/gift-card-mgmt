@@ -79,3 +79,19 @@ test("other Postgres errors are not treated as conflicts", async () => {
   assert.equal(res.statusCode, 500);
   await app.close();
 });
+
+test("Postgres deadlock and serialization failures map to 503 with Retry-After", async () => {
+  for (const error of [
+    Object.assign(new Error("deadlock detected"), { code: "40P01" }),
+    Object.assign(new Error("could not serialize access"), { code: "40001" }),
+    Object.assign(new Error("query failed"), { driverError: { code: "40P01" } }),
+    Object.assign(new Error("query failed"), { driverError: { code: "40001" } }),
+  ]) {
+    const app = await appThrowing(error);
+    const res = await app.inject({ method: "GET", url: "/boom" });
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.headers["retry-after"], "1");
+    assert.deepEqual(res.json(), { error: "Temporary conflict, please retry" });
+    await app.close();
+  }
+});

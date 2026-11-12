@@ -3,6 +3,9 @@ services:
     image: postgres:18
     restart: unless-stopped
     # Values come from the .env file in the project root (the same one the app reads).
+    # Compose requires both the admin and the app credentials, and the two usernames must differ
+    # (db/init/01-app-role.sh refuses to initialise otherwise). The app itself also accepts
+    # neither DB_ADMIN_* variable (single-user mode, e.g. CI without compose), but not just one.
     # They are only applied the first time the volume is initialised.
     environment:
       # Admin (schema owner) role, used by migrations

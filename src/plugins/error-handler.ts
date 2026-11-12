@@ -3,6 +3,8 @@ import { FastifyInstance, FastifyRequest, FastifyReply, FastifyError } from "fas
 import { AppError } from "../errors";
 
 const PG_UNIQUE_VIOLATION = "23505";
+const PG_SERIALIZATION_FAILURE = "40001";
+const PG_DEADLOCK_DETECTED = "40P01";
 
 // TypeORM's QueryFailedError copies the driver error's fields onto itself and also keeps
 // the original under `driverError`.
@@ -10,6 +12,15 @@ function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const e = error as { code?: unknown; driverError?: { code?: unknown } };
   return e.code === PG_UNIQUE_VIOLATION || e.driverError?.code === PG_UNIQUE_VIOLATION;
+}
+
+// A transaction the database aborted because of a concurrent one; safe for the client to retry
+function isRetryableConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { code?: unknown; driverError?: { code?: unknown } };
+  return [e.code, e.driverError?.code].some(
+    (code) => code === PG_DEADLOCK_DETECTED || code === PG_SERIALIZATION_FAILURE
+  );
 }
 
 export default fp(async function (fastify: FastifyInstance) {
@@ -22,6 +33,15 @@ export default fp(async function (fastify: FastifyInstance) {
       // Race-condition fallback: services pre-check uniqueness, the DB constraint is the backstop
       if (isUniqueViolation(error)) {
         return reply.status(409).send({ error: "Already exists" });
+      }
+
+      // Backstop for concurrent-transaction aborts (deadlock, serialization failure)
+      if (isRetryableConflict(error)) {
+        request.log.warn(error);
+        return reply
+          .status(503)
+          .header("Retry-After", "1")
+          .send({ error: "Temporary conflict, please retry" });
       }
 
       // Client errors (schema validation 400, rate limit 429, ...) keep their status and message

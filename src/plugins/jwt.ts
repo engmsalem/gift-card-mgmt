@@ -35,7 +35,7 @@ export default fp(async function (fastify: FastifyInstance) {
   });
 });
 
-/** preHandler factory; use after `fastify.authenticate`. */
+/** onRequest hook factory (runs before body parsing and validation); use after `fastify.authenticate`. */
 export function requireRole(...roles: Role[]) {
   return async function (request: FastifyRequest): Promise<void> {
     if (!roles.includes(request.user.role)) {

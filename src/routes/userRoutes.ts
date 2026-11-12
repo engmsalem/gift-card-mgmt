@@ -12,7 +12,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: CreateUserInput }>(
     "/users",
     {
-      preHandler: adminOnly,
+      onRequest: adminOnly,
       schema: {
         body: {
           type: "object",
@@ -37,7 +37,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
   fastify.get(
     "/users",
     {
-      preHandler: adminOnly,
+      onRequest: adminOnly,
       schema: { response: { 200: { type: "array", items: userResponse }, "4xx": errorResponse } },
     },
     async (request) => userService.listUsers(request.user.tenantId)
@@ -46,7 +46,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
   fastify.get(
     "/users/me",
     {
-      preHandler: [fastify.authenticate],
+      onRequest: [fastify.authenticate],
       schema: { response: { 200: userResponse, "4xx": errorResponse } },
     },
     async (request) => userService.getUser(request.user.tenantId, request.user.id)

@@ -11,7 +11,8 @@ export interface Config {
   // Least-privileged role used by the running app
   dbUsername: string;
   dbPassword: string;
-  // Schema-owning role used only by migrations (defaults to the app credentials)
+  // Schema-owning role used only by migrations. Set both DB_ADMIN_* variables or neither;
+  // with neither, the app credentials are used for both (single-user mode, no DML-only role).
   dbAdminUsername: string;
   dbAdminPassword: string;
   dbLogging: boolean;
@@ -99,6 +100,17 @@ export function loadConfig(env: Env): Readonly<Config> {
   const dbUsername = str("DB_USERNAME");
   const dbPassword = str("DB_PASSWORD");
 
+  // Admin credentials are a pair: both set, or both unset (then the app credentials are used)
+  const adminUserSet = (env.DB_ADMIN_USERNAME ?? "") !== "";
+  const adminPasswordSet = (env.DB_ADMIN_PASSWORD ?? "") !== "";
+  if (adminUserSet !== adminPasswordSet) {
+    problems.push(
+      adminUserSet
+        ? "DB_ADMIN_PASSWORD is required when DB_ADMIN_USERNAME is set"
+        : "DB_ADMIN_USERNAME is required when DB_ADMIN_PASSWORD is set"
+    );
+  }
+
   let jwtSecret = env.JWT_SECRET ?? "";
   if (jwtSecret === "") {
     problems.push("JWT_SECRET is required");
@@ -118,8 +130,8 @@ export function loadConfig(env: Env): Readonly<Config> {
     dbDatabase: str("DB_DATABASE"),
     dbUsername,
     dbPassword,
-    dbAdminUsername: str("DB_ADMIN_USERNAME", dbUsername),
-    dbAdminPassword: str("DB_ADMIN_PASSWORD", dbPassword),
+    dbAdminUsername: adminUserSet && adminPasswordSet ? str("DB_ADMIN_USERNAME") : dbUsername,
+    dbAdminPassword: adminUserSet && adminPasswordSet ? str("DB_ADMIN_PASSWORD") : dbPassword,
     dbLogging: bool("DB_LOGGING", false),
     jwtSecret,
     trustProxy: bool("TRUST_PROXY", false),

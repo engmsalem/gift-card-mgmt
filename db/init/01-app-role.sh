@@ -3,6 +3,13 @@
 # Creates the least-privileged app role (DML only, no DDL) and a "<db>_test" database.
 set -euo pipefail
 
+# The app role must differ from the admin (schema owner) role: CREATE ROLE would fail on the
+# existing role, and a shared role would defeat the DML-only app role.
+if [ "$APP_DB_USER" = "$POSTGRES_USER" ]; then
+  echo "DB_USERNAME must differ from DB_ADMIN_USERNAME" >&2
+  exit 1
+fi
+
 TEST_DB="${POSTGRES_DB}_test"
 
 # Secrets are passed as psql variables and quoted by psql (:"ident" / :'literal'),

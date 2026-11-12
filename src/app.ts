@@ -39,12 +39,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   // Register plugins in order
   await app.register(errorHandler); // Register error handler first
-  await app.register(rateLimit); // Then rate limiting
+  // CORS before rate limiting: its onRequest hook then sets CORS headers on every response
+  // (including 429s) and answers preflight OPTIONS requests before they are counted
   await app.register(cors, {
     origin: config.corsOrigin,
     methods: config.corsMethods,
     allowedHeaders: config.corsAllowedHeaders,
   });
+  await app.register(rateLimit);
   await app.register(jwtPlugin); // Then authentication
 
   // Register routes last

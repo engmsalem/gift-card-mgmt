@@ -86,3 +86,34 @@ test("CORS_ORIGIN: * must be used alone", () => {
   );
   assert.equal(loadConfig({ ...validEnv, CORS_ORIGIN: "*" }).corsOrigin, "*");
 });
+
+test("DB_ADMIN_* are a pair: both unset falls back to the app credentials as a pair", () => {
+  const cfg = loadConfig(validEnv);
+  assert.equal(cfg.dbAdminUsername, validEnv.DB_USERNAME);
+  assert.equal(cfg.dbAdminPassword, validEnv.DB_PASSWORD);
+  // empty strings count as unset
+  const empty = loadConfig({ ...validEnv, DB_ADMIN_USERNAME: "", DB_ADMIN_PASSWORD: "" });
+  assert.equal(empty.dbAdminUsername, validEnv.DB_USERNAME);
+  assert.equal(empty.dbAdminPassword, validEnv.DB_PASSWORD);
+});
+
+test("DB_ADMIN_* both set are used as given", () => {
+  const cfg = loadConfig({ ...validEnv, DB_ADMIN_USERNAME: "owner", DB_ADMIN_PASSWORD: "owner-pass" });
+  assert.equal(cfg.dbAdminUsername, "owner");
+  assert.equal(cfg.dbAdminPassword, "owner-pass");
+});
+
+test("DB_ADMIN_* exactly one set is a ConfigError naming the missing one", () => {
+  assert.throws(
+    () => loadConfig({ ...validEnv, DB_ADMIN_USERNAME: "owner" }),
+    /DB_ADMIN_PASSWORD is required when DB_ADMIN_USERNAME is set/
+  );
+  assert.throws(
+    () => loadConfig({ ...validEnv, DB_ADMIN_PASSWORD: "owner-pass" }),
+    /DB_ADMIN_USERNAME is required when DB_ADMIN_PASSWORD is set/
+  );
+  assert.throws(
+    () => loadConfig({ ...validEnv, DB_ADMIN_USERNAME: "owner", DB_ADMIN_PASSWORD: "" }),
+    /DB_ADMIN_PASSWORD is required/
+  );
+});

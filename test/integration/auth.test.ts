@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
 import {
   PASSWORD,
   UUID_V7,
@@ -392,4 +393,81 @@ test("a non-string refreshToken is rejected, not coerced", async () => {
     payload: { refreshToken: 123 },
   });
   assert.equal(res.statusCode, 400);
+});
+
+test("CORS headers are set on a rate-limited 429 response", async () => {
+  let last: Awaited<ReturnType<typeof send>> | undefined;
+  for (let i = 0; i < 11; i++) {
+    last = await send(getApp(), {
+      method: "POST",
+      url: "/auth/login",
+      headers: { origin: "https://app.example" },
+      payload: { email: "nobody@acme.com", password: "x" },
+    });
+  }
+  assert.equal(last?.statusCode, 429);
+  assert.ok(last?.headers["access-control-allow-origin"], "429 must carry CORS headers");
+});
+
+test("a CORS preflight is answered with 204 and does not consume the login rate limit", async () => {
+  const preflight = {
+    method: "OPTIONS",
+    url: "/auth/login",
+    headers: { origin: "https://app.example", "access-control-request-method": "POST" },
+  } as const;
+  const first = await send(getApp(), preflight);
+  assert.equal(first.statusCode, 204);
+  assert.ok(first.headers["access-control-allow-origin"]);
+  assert.ok(first.headers["access-control-allow-methods"]);
+
+  for (let i = 0; i < 9; i++) {
+    assert.equal((await send(getApp(), preflight)).statusCode, 204);
+  }
+  for (let i = 0; i < 10; i++) {
+    const res = await send(getApp(), {
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: "nobody@acme.com", password: "x" },
+    });
+    assert.notEqual(res.statusCode, 429, `login ${i + 1}`);
+  }
+});
+
+test("concurrent refreshes for a user over the session cap never fail with a server error", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const userId = s.adminId;
+  const SESSIONS = 12;
+  const CONCURRENCY = 5;
+  const ROUNDS = 12;
+
+  // Seed more active sessions than the cap directly (login is rate limited)
+  const pool: string[] = [];
+  for (let i = 0; i < SESSIONS; i++) {
+    const raw = randomBytes(32).toString("base64url");
+    pool.push(raw);
+    await adminQuery(
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at)
+       VALUES ($1, $2, now() + interval '7 days', now() - ($3 || ' seconds')::interval)`,
+      [userId, createHash("sha256").update(raw).digest("hex"), String(SESSIONS - i)]
+    );
+  }
+
+  for (let round = 0; round < ROUNDS; round++) {
+    // The newest tokens are never evicted, so these are always valid and distinct
+    const batch = pool.splice(-CONCURRENCY);
+    const results = await Promise.all(
+      batch.map((refreshToken) => refreshWith(refreshToken))
+    );
+    for (const res of results) {
+      assert.equal(res.statusCode, 200, `round ${round}: ${res.body}`);
+      pool.push(res.json<Tokens>().refreshToken);
+    }
+  }
+
+  // One more, uncontended issue converges on the cap
+  await login(getApp(), s.email);
+  const rows = (await adminQuery(
+    "SELECT count(*)::int AS active FROM refresh_tokens WHERE revoked_at IS NULL AND expires_at > now()"
+  )) as { active: number }[];
+  assert.ok(rows[0].active <= 10, `active tokens: ${rows[0].active}`);
 });

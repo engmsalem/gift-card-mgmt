@@ -151,12 +151,18 @@ export class AuthService {
 
     // Cap concurrent sessions: evict the user's oldest active tokens beyond the limit. Evicted
     // tokens are rejected like any logged-out token and do not trigger theft handling.
+    // FOR UPDATE SKIP LOCKED: never wait on rows another transaction holds (two concurrent
+    // issues for one user would otherwise lock overlapping rows in different orders and
+    // deadlock). Locked rows are dropped before OFFSET counts, so a locked row among the
+    // newest ones shifts the window and fewer tokens are evicted than ideal, never one of the
+    // newest MAX_ACTIVE_REFRESH_TOKENS; the cap converges on the next issue.
     await this.revoke(
       `id IN (
          SELECT id FROM refresh_tokens
          WHERE user_id = :userId AND revoked_at IS NULL AND expires_at > now()
          ORDER BY created_at DESC, id DESC
          OFFSET ${MAX_ACTIVE_REFRESH_TOKENS}
+         FOR UPDATE SKIP LOCKED
        )`,
       { userId: user.id },
       "evicted",

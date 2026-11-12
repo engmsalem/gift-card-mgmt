@@ -215,3 +215,35 @@ test("wrong-typed body fields are rejected, not coerced", async () => {
     assert.equal(res.statusCode, 400, JSON.stringify(override));
   }
 });
+
+test("authentication and role checks run before body validation", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const admin = await login(getApp(), s.email);
+  await send(getApp(), {
+    method: "POST",
+    url: "/users",
+    headers: bearer(admin.accessToken),
+    payload: { name: "Sam", email: "sam@acme.com", password: PASSWORD },
+  });
+  const staff = await login(getApp(), "sam@acme.com");
+  const invalid = { name: "" };
+
+  const anonymous = await send(getApp(), { method: "POST", url: "/users", payload: invalid });
+  assert.equal(anonymous.statusCode, 401);
+
+  const asStaff = await send(getApp(), {
+    method: "POST",
+    url: "/users",
+    headers: bearer(staff.accessToken),
+    payload: invalid,
+  });
+  assert.equal(asStaff.statusCode, 403);
+
+  const asAdmin = await send(getApp(), {
+    method: "POST",
+    url: "/users",
+    headers: bearer(admin.accessToken),
+    payload: invalid,
+  });
+  assert.equal(asAdmin.statusCode, 400);
+});
