@@ -1,6 +1,8 @@
+import bcrypt from "bcrypt";
 import { isEmail } from "class-validator";
 import { BadRequestError } from "./errors";
 
+export const BCRYPT_COST = 10;
 const MAX_PASSWORD_BYTES = 72; // bcrypt ignores everything past 72 bytes
 
 export function normalizeEmail(raw: string): string {
@@ -18,4 +20,8 @@ export function assertPasswordFitsBcrypt(password: string): void {
   if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
     throw new BadRequestError("Password must be at most 72 bytes");
   }
+}
+
+export function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, BCRYPT_COST);
 }

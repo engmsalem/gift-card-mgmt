@@ -1,10 +1,9 @@
 import { FastifyInstance } from "fastify";
-import bcrypt from "bcrypt";
 import { Repository } from "typeorm";
 import { User } from "../entities/user";
 import { Role } from "../enums/roles";
 import { ConflictError, NotFoundError } from "../errors";
-import { assertPasswordFitsBcrypt, assertValidEmail, normalizeEmail } from "../credentials";
+import { assertPasswordFitsBcrypt, assertValidEmail, hashPassword, normalizeEmail } from "../credentials";
 
 export interface CreateUserInput {
   name: string;
@@ -30,7 +29,7 @@ export class UserService {
       throw new ConflictError("Email already registered");
     }
 
-    const passwordHash = await bcrypt.hash(input.password, 10);
+    const passwordHash = await hashPassword(input.password);
     return this.userRepository.save(
       this.userRepository.create({
         tenantId,

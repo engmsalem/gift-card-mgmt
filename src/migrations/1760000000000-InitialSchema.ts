@@ -28,7 +28,7 @@ export class InitialSchema1760000000000 implements MigrationInterface {
         "id"             uuid PRIMARY KEY DEFAULT uuidv7(),
         "tenant_id"      uuid         NOT NULL REFERENCES "tenants" ("id"),
         "name"           varchar(100) NOT NULL,
-        "email"          varchar(150) NOT NULL UNIQUE,
+        "email"          varchar(254) NOT NULL UNIQUE,
         "password_hash"  varchar(255) NOT NULL,
         "role"           "user_role"  NOT NULL DEFAULT 'staff',
         "created_at"     timestamptz  NOT NULL DEFAULT now(),
@@ -45,9 +45,10 @@ export class InitialSchema1760000000000 implements MigrationInterface {
         "pin"          varchar(6)    NOT NULL,
         "balance"      numeric(10,2) NOT NULL DEFAULT 0.00,
         "expiry_date"  date          NOT NULL,
-        "status"       "gift_card_status" DEFAULT 'active',
+        "status"       "gift_card_status" NOT NULL DEFAULT 'active',
         "created_at"   timestamptz   NOT NULL DEFAULT now(),
-        "updated_at"   timestamptz   NOT NULL DEFAULT now()
+        "updated_at"   timestamptz   NOT NULL DEFAULT now(),
+        CONSTRAINT "gift_cards_balance_nonnegative" CHECK ("balance" >= 0)
       )
     `);
     await queryRunner.query(
@@ -61,7 +62,8 @@ export class InitialSchema1760000000000 implements MigrationInterface {
         "gift_card_id"  uuid               NOT NULL REFERENCES "gift_cards" ("id"),
         "type"          "transaction_type" NOT NULL,
         "amount"        numeric(10,2)      NOT NULL,
-        "created_at"    timestamptz        NOT NULL DEFAULT now()
+        "created_at"    timestamptz        NOT NULL DEFAULT now(),
+        CONSTRAINT "transactions_amount_positive" CHECK ("amount" > 0)
       )
     `);
     await queryRunner.query(

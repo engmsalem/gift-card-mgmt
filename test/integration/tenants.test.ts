@@ -1,9 +1,12 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
+import bcrypt from "bcrypt";
 import {
   PASSWORD,
   UUID_V7,
   adminQuery,
+  bearer,
+  login,
   send,
   signupTenant,
   useTestApp,
@@ -119,4 +122,76 @@ test("unknown body fields return 400", async () => {
     payload: signupPayload({ admin: { role: "admin" } }),
   });
   assert.equal(nested.statusCode, 400);
+});
+
+// Valid per RFC 5321 limits (64-char local part, 63-char labels), 196 characters in total
+const LONG_EMAIL = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.com`;
+
+test("a long but valid email is accepted for signup and for inviting a user", async () => {
+  assert.ok(LONG_EMAIL.length > 150 && LONG_EMAIL.length <= 254);
+  const res = await send(getApp(), {
+    method: "POST",
+    url: "/tenants",
+    payload: signupPayload({ admin: { email: LONG_EMAIL } }),
+  });
+  assert.equal(res.statusCode, 201, res.body);
+
+  const { accessToken } = await login(getApp(), LONG_EMAIL);
+  const invite = await send(getApp(), {
+    method: "POST",
+    url: "/users",
+    headers: bearer(accessToken),
+    payload: { name: "Sam", email: LONG_EMAIL.replace("aaaa", "dddd"), password: PASSWORD },
+  });
+  assert.equal(invite.statusCode, 201, invite.body);
+});
+
+test("an email of 255 characters returns 400", async () => {
+  const email = `${"a".repeat(255 - "@x.com".length)}@x.com`;
+  assert.equal(email.length, 255);
+  const res = await send(getApp(), {
+    method: "POST",
+    url: "/tenants",
+    payload: signupPayload({ admin: { email } }),
+  });
+  assert.equal(res.statusCode, 400);
+});
+
+test("a signup that conflicts does not run bcrypt", async () => {
+  await signupTenant(getApp(), "acme", "one@x.com");
+  const hash = mock.method(bcrypt, "hash");
+  try {
+    const bySubdomain = await send(getApp(), {
+      method: "POST",
+      url: "/tenants",
+      payload: signupPayload({ admin: { email: "two@x.com" } }),
+    });
+    const byEmail = await send(getApp(), {
+      method: "POST",
+      url: "/tenants",
+      payload: signupPayload({ tenant: { subdomain: "other" }, admin: { email: "one@x.com" } }),
+    });
+    assert.equal(bySubdomain.statusCode, 409);
+    assert.equal(byEmail.statusCode, 409);
+    assert.equal(hash.mock.callCount(), 0);
+
+    // Control: the spy does see a successful signup
+    await signupTenant(getApp(), "third", "three@x.com");
+    assert.equal(hash.mock.callCount(), 1);
+  } finally {
+    hash.mock.restore();
+  }
+});
+
+test("signup is rate limited to 5 per minute", async () => {
+  const statuses: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    const res = await send(getApp(), {
+      method: "POST",
+      url: "/tenants",
+      payload: signupPayload({ tenant: { subdomain: `t${i}x` }, admin: { email: `u${i}@x.com` } }),
+    });
+    statuses.push(res.statusCode);
+  }
+  assert.deepEqual(statuses, [201, 201, 201, 201, 201, 429]);
 });

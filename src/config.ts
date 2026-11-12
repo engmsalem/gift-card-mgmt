@@ -14,7 +14,10 @@ export interface Config {
   dbAdminPassword: string;
   dbLogging: boolean;
   jwtSecret: string;
-  corsOrigin: string;
+  // Set only behind a trusted reverse proxy: makes request.ip (and rate limiting) use X-Forwarded-For
+  trustProxy: boolean;
+  // A single origin (or "*") stays a string; several become a list
+  corsOrigin: string | string[];
   corsMethods: string[];
   corsAllowedHeaders: string[];
 }
@@ -72,6 +75,9 @@ export function loadConfig(env: Env): Readonly<Config> {
     return raw.split(",").map((item) => item.trim()).filter(Boolean);
   };
 
+  const corsOrigins = list("CORS_ORIGIN", ["*"]);
+  if (corsOrigins.length === 0) problems.push("CORS_ORIGIN must contain at least one origin");
+
   const dbUsername = str("DB_USERNAME");
   const dbPassword = str("DB_PASSWORD");
 
@@ -97,7 +103,8 @@ export function loadConfig(env: Env): Readonly<Config> {
     dbAdminPassword: str("DB_ADMIN_PASSWORD", dbPassword),
     dbLogging: bool("DB_LOGGING", false),
     jwtSecret,
-    corsOrigin: str("CORS_ORIGIN", "*"),
+    trustProxy: bool("TRUST_PROXY", false),
+    corsOrigin: corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins,
     corsMethods: list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]),
     corsAllowedHeaders: list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]),
   };

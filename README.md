@@ -38,7 +38,7 @@ src/
 ├── plugins/
 │   ├── error-handler.ts     # Maps AppError / validation / unique violations to status codes
 │   ├── jwt.ts               # Access token signing/verification, `authenticate`, `requireRole`
-│   └── rate-limit.ts        # 100 requests / minute per IP (login: 10 / minute)
+│   └── rate-limit.ts        # 100 requests / minute per IP (login: 10, tenant signup: 5)
 ├── routes/                  # tenantRoutes, authRoutes, userRoutes, shared response schemas
 ├── services/                # TenantService, AuthService, UserService
 └── types/requests.d.ts      # Fastify / JWT type augmentations
@@ -66,7 +66,7 @@ Defined by the migrations in `src/migrations/`. All tenant-owned tables carry a 
 | `tenants`        | Merchants, each with a unique `subdomain`                               | Yes          |
 | `users`          | Tenant staff: `name`, globally unique `email`, `role` (`admin` / `staff`) | Yes          |
 | `refresh_tokens` | SHA-256 hashes of issued refresh tokens, with expiry and revocation       | Yes          |
-| `gift_cards`     | Card number, PIN, balance, expiry date, status (`active` / `inactive` / `expired`) | Not yet |
+| `gift_cards`     | Card number, PIN, balance (`CHECK >= 0`), expiry date, status (`active` / `inactive` / `expired`) | Not yet |
 | `transactions`   | `redemption` / `refund` movements against a gift card                     | Not yet      |
 | `audit_logs`     | JSON (`jsonb`) action log per tenant/user                                 | Not yet      |
 
@@ -74,7 +74,7 @@ Defined by the migrations in `src/migrations/`. All tenant-owned tables carry a 
 
 ### Prerequisites
 
-- Node.js **20.19+, 22.13+ or 24.11+** (required by TypeORM 1.x)
+- Node.js **22.13+ or 24.11+** (TypeORM 1.x needs 20.19+, and the test scripts need 22+)
 - Docker with Docker Compose
 
 ### 1. Configure environment
@@ -98,7 +98,8 @@ Both the app and `docker-compose.yml` read this file.
 | `DB_ADMIN_PASSWORD`    | yes\*    | `DB_PASSWORD`                | Password for the admin role |
 | `JWT_SECRET`           | yes      | none                         | At least 32 characters. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement |
-| `CORS_ORIGIN`          | no       | `*`                          | |
+| `CORS_ORIGIN`          | no       | `*`                          | One origin, or a comma-separated list |
+| `TRUST_PROXY`          | no       | `false`                      | Set to `true` behind a reverse proxy / load balancer so rate limits use the real client IP (`X-Forwarded-For`). Leave `false` otherwise: clients could spoof their IP |
 | `CORS_METHODS`         | no       | `GET,POST,PUT,DELETE`        | Comma-separated |
 | `CORS_ALLOWED_HEADERS` | no       | `Content-Type,Authorization` | Comma-separated |
 
@@ -166,7 +167,7 @@ curl localhost:3000/users/me -H "Authorization: Bearer <accessToken>"
 
 | Method | Path            | Auth          | Body | Response |
 | ------ | --------------- | ------------- | ---- | -------- |
-| POST   | `/tenants`      | none          | `{ tenant: { name, subdomain }, admin: { name, email, password } }` | `201 { tenant, user }`. Creates the tenant and its first `admin` in one transaction. `409` if the subdomain or email is taken |
+| POST   | `/tenants`      | none          | `{ tenant: { name, subdomain }, admin: { name, email, password } }` | `201 { tenant, user }`. Creates the tenant and its first `admin` in one transaction. `409` if the subdomain or email is taken. Limited to 5 / minute |
 | POST   | `/auth/login`   | none          | `{ email, password }` | `200 { accessToken, refreshToken, expiresIn }`. `401` on bad credentials. Limited to 10 / minute |
 | POST   | `/auth/refresh` | none          | `{ refreshToken }` | `200` with a **new** token pair. The old refresh token stops working |
 | POST   | `/auth/logout`  | none          | `{ refreshToken }` | `204`. Revokes the refresh token (idempotent) |
@@ -183,7 +184,7 @@ Rules:
 ### Tokens
 
 - **Access token:** a JWT (HS256, signed with `JWT_SECRET`), valid for **15 minutes**, with claims `sub` (user UUID), `tid` (tenant UUID), `role` and `typ: "access"`. Send it as `Authorization: Bearer <token>`.
-- **Refresh token:** a random opaque string, valid for **7 days**. Only its SHA-256 hash is stored. Each refresh **rotates** it: the old one is revoked and a new pair is returned. Presenting a refresh token that was already used or revoked is treated as theft, and **all** of that user's refresh tokens are revoked, forcing a new login.
+- **Refresh token:** a random opaque string, valid for **7 days**. Only its SHA-256 hash is stored. Each refresh **rotates** it: the old one is revoked and a new pair is returned. Rotation is atomic: if issuing the new pair fails, the old token stays valid. Presenting a refresh token that was revoked **more than 10 seconds ago** is treated as theft, and **all** of that user's refresh tokens are revoked, forcing a new login. Within those 10 seconds (two tabs or a client retry racing on the same token) the request just gets `401`. Expired rows are deleted whenever the user gets new tokens.
 - Access tokens can't be revoked early. After logout they stay valid until they expire (at most 15 minutes).
 
 ## Database migrations
@@ -221,17 +222,15 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 16 unit tests, 42 integration tests and the migration drift check._
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 18 unit tests, 50 integration tests and the migration drift check._
 
 ### Known limitations
 
 - **No gift card features yet.** `gift_cards`, `transactions` and `audit_logs` exist in the schema only.
 - **No subdomain routing.** Tenants have a `subdomain`, but requests aren't resolved by `Host` header yet. The tenant comes from the access token.
 - Emails are unique across all tenants, so one person can't belong to two tenants with the same email.
-- Access tokens stay valid for up to 15 minutes after logout. Expired and revoked rows in `refresh_tokens` are never cleaned up.
-- Two simultaneous refreshes with the same refresh token look like token reuse and log the user out everywhere. This is the usual trade-off of rotation with reuse detection.
-- `POST /tenants` is public and only covered by the global rate limit.
-- `gift_cards.status` is nullable (it has a default).
+- Access tokens stay valid for up to 15 minutes after logout. Expired refresh-token rows are only removed when that user next logs in or refreshes, so rows of inactive users remain until a periodic cleanup job exists.
+- **Gift card PINs are stored as plain text** in the schema. A 6-digit PIN can't simply be bcrypt-hashed (only a million combinations, so it's quick to brute-force offline). Decide on a keyed hash (HMAC with a server-side secret) or encryption when the gift card feature is built, before any real cards are stored.
 
 ### Security notes
 

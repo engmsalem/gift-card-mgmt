@@ -9,6 +9,8 @@ export default async function tenantRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: CreateTenantInput }>(
     "/tenants",
     {
+      // Public and bcrypt-heavy, so much stricter than the global limit
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
       schema: {
         body: {
           type: "object",

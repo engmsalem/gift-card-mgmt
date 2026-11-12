@@ -31,7 +31,7 @@ export class User extends ExtendedBaseEntity {
   @Column({ type: "varchar", length: 100 })
   name: string;
 
-  @Column({ type: "varchar", length: 150, unique: true })
+  @Column({ type: "varchar", length: 254, unique: true })
   @IsEmail()
   email: string;
 

@@ -165,30 +165,91 @@ test("refresh rotates: new pair works, old token is rejected", async () => {
   assert.equal(me.statusCode, 200);
 });
 
-test("reusing a rotated refresh token is rejected and revokes the newer token too", async () => {
+async function refreshWith(refreshToken: string) {
+  return send(getApp(), { method: "POST", url: "/auth/refresh", payload: { refreshToken } });
+}
+
+test("a rotated token presented again right away is rejected without revoking the newer pair", async () => {
   const s = await signupTenant(getApp(), "acme", "ada@acme.com");
   const first = await login(getApp(), s.email);
-  const rotated = (
-    await send(getApp(), {
-      method: "POST",
-      url: "/auth/refresh",
-      payload: { refreshToken: first.refreshToken },
-    })
-  ).json<Tokens>();
+  const rotated = (await refreshWith(first.refreshToken)).json<Tokens>();
 
-  const reuse = await send(getApp(), {
-    method: "POST",
-    url: "/auth/refresh",
-    payload: { refreshToken: first.refreshToken },
-  });
-  assert.equal(reuse.statusCode, 401);
+  // Two tabs / a client retry racing on the same token: only the loser gets a 401
+  assert.equal((await refreshWith(first.refreshToken)).statusCode, 401);
 
-  const newer = await send(getApp(), {
-    method: "POST",
-    url: "/auth/refresh",
-    payload: { refreshToken: rotated.refreshToken },
+  const me = await send(getApp(), {
+    method: "GET",
+    url: "/users/me",
+    headers: bearer(rotated.accessToken),
   });
-  assert.equal(newer.statusCode, 401);
+  assert.equal(me.statusCode, 200);
+  assert.equal((await refreshWith(rotated.refreshToken)).statusCode, 200);
+});
+
+test("reusing a rotated refresh token after the grace window is rejected and revokes the newer token too", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const first = await login(getApp(), s.email);
+  const rotated = (await refreshWith(first.refreshToken)).json<Tokens>();
+
+  // Only the first token is revoked so far
+  await adminQuery(
+    "UPDATE refresh_tokens SET revoked_at = now() - interval '1 minute' WHERE revoked_at IS NOT NULL"
+  );
+
+  assert.equal((await refreshWith(first.refreshToken)).statusCode, 401);
+  assert.equal((await refreshWith(rotated.refreshToken)).statusCode, 401);
+});
+
+test("a failure while issuing the new pair rolls the revocation back", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const tokens = await login(getApp(), s.email);
+
+  // Make inserting the new (unrevoked) token fail; revoking the old one still passes
+  // (as the admin role, which owns the table)
+  await adminQuery(
+    "ALTER TABLE refresh_tokens ADD CONSTRAINT test_reject_new CHECK (revoked_at IS NOT NULL) NOT VALID"
+  );
+  try {
+    assert.equal((await refreshWith(tokens.refreshToken)).statusCode, 500);
+  } finally {
+    await adminQuery("ALTER TABLE refresh_tokens DROP CONSTRAINT test_reject_new");
+  }
+
+  // The old token was not consumed
+  assert.equal((await refreshWith(tokens.refreshToken)).statusCode, 200);
+});
+
+test("login deletes the user's expired refresh tokens but keeps revoked unexpired ones", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const expired = await login(getApp(), s.email);
+  const revoked = await login(getApp(), s.email);
+  await send(getApp(), {
+    method: "POST",
+    url: "/auth/logout",
+    payload: { refreshToken: revoked.refreshToken },
+  });
+  await adminQuery(
+    "UPDATE refresh_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')",
+    [expired.refreshToken]
+  );
+
+  await login(getApp(), s.email);
+
+  const rows = (await adminQuery(
+    "SELECT revoked_at IS NOT NULL AS revoked, expires_at > now() AS live FROM refresh_tokens ORDER BY created_at"
+  )) as { revoked: boolean; live: boolean }[];
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r.revoked), [true, false]);
+  assert.ok(rows.every((r) => r.live));
+});
+
+test("refresh tokens expire in 7 days by the database clock", async () => {
+  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  await login(getApp(), s.email);
+  const rows = (await adminQuery(
+    "SELECT extract(epoch FROM expires_at - created_at)::int AS ttl FROM refresh_tokens"
+  )) as { ttl: number }[];
+  assert.equal(rows[0].ttl, 7 * 24 * 60 * 60);
 });
 
 test("an expired refresh token is rejected", async () => {

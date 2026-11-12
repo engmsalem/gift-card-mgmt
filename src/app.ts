@@ -21,6 +21,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const app: FastifyInstance = Fastify({
     // Fastify defaults to removeAdditional: true, which silently drops unknown body fields;
     // we want additionalProperties: false to reject them with a 400.
+    // Off unless TRUST_PROXY is set: otherwise clients could spoof X-Forwarded-For
+    trustProxy: config.trustProxy,
     ajv: { customOptions: { removeAdditional: false } },
     logger: opts.logger ?? {
       level: config.nodeEnv === "production" ? "info" : "debug",
