@@ -12,23 +12,17 @@ import { Role } from "../enums/roles";
 import { IsEmail } from "class-validator";
 import ExtendedBaseEntity from "./extended-base-entity";
 import { Tenant } from "./tenant";
-import { bigintTransformer } from "./transformers";
 
 // Table and column names follow src/migrations (plural table, snake_case columns).
 // "user" is a reserved word in PostgreSQL, so the table is "users".
 @Entity("users")
 export class User extends ExtendedBaseEntity {
-  @PrimaryColumn({
-    type: "bigint",
-    generated: "identity",
-    generatedIdentity: "BY DEFAULT",
-    transformer: bigintTransformer,
-  })
-  id: number;
+  @PrimaryColumn({ type: "uuid", default: () => "uuidv7()" })
+  id: string;
 
   @Index("users_tenant_id_idx")
-  @Column({ name: "tenant_id", type: "bigint", transformer: bigintTransformer })
-  tenantId: number;
+  @Column({ name: "tenant_id", type: "uuid" })
+  tenantId: string;
 
   @ManyToOne(() => Tenant, { nullable: false })
   @JoinColumn({ name: "tenant_id", foreignKeyConstraintName: "users_tenant_id_fkey" })

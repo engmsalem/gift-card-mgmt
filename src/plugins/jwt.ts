@@ -15,7 +15,7 @@ export default fp(async function (fastify: FastifyInstance) {
     verify: { algorithms: ["HS256"] },
     // request.user is the minimal identity the app needs, not the raw claims
     formatUser: (payload) => ({
-      id: Number(payload.sub),
+      id: payload.sub,
       tenantId: payload.tid,
       role: payload.role,
     }),

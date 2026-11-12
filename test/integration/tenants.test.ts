@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   PASSWORD,
+  UUID_V7,
   adminQuery,
   send,
   signupTenant,
@@ -27,8 +28,9 @@ test("signup creates a tenant and its first admin", async () => {
   assert.equal(body.user.email, "ada@acme.com");
   assert.equal(body.user.role, "admin");
   assert.equal(body.user.tenantId, body.tenant.id);
-  assert.equal(typeof body.user.id, "number");
-  assert.equal(typeof body.tenant.id, "number");
+  assert.match(body.user.id, UUID_V7);
+  assert.match(body.tenant.id, UUID_V7);
+  assert.match(body.user.tenantId, UUID_V7);
 });
 
 test("signup trims and lowercases the email", async () => {

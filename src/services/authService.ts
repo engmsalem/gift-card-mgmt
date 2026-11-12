@@ -73,7 +73,7 @@ export class AuthService {
     }
 
     // Role and tenant are re-read so changes apply on the next refresh
-    const user = await this.userRepository.findOneBy({ id: Number(rows[0].user_id) });
+    const user = await this.userRepository.findOneBy({ id: rows[0].user_id });
     if (!user) {
       throw new UnauthorizedError("Invalid or expired refresh token");
     }
@@ -92,7 +92,7 @@ export class AuthService {
       .execute();
   }
 
-  private async revokeAllForUser(userId: number): Promise<void> {
+  private async revokeAllForUser(userId: string): Promise<void> {
     await this.tokenRepository
       .createQueryBuilder()
       .update()
@@ -103,7 +103,7 @@ export class AuthService {
 
   private async issueTokens(user: Pick<User, "id" | "tenantId" | "role">): Promise<TokenPair> {
     const accessToken = this.app.jwt.sign({
-      sub: String(user.id),
+      sub: user.id,
       tid: user.tenantId,
       role: user.role,
       typ: ACCESS_TOKEN_TYPE,

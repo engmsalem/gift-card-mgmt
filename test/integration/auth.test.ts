@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   PASSWORD,
+  UUID_V7,
   adminQuery,
   bearer,
   login,
@@ -20,8 +21,10 @@ test("login returns an access/refresh pair", async () => {
   assert.equal(tokens.expiresIn, 900);
   assert.match(tokens.refreshToken, /^[A-Za-z0-9_-]{43}$/);
   const payload = getApp().jwt.decode<Record<string, unknown>>(tokens.accessToken);
-  assert.equal(payload?.sub, String(s.adminId));
+  assert.equal(payload?.sub, s.adminId);
   assert.equal(payload?.tid, s.tenantId);
+  assert.match(String(payload?.sub), UUID_V7);
+  assert.match(String(payload?.tid), UUID_V7);
   assert.equal(payload?.role, "admin");
   assert.equal(payload?.typ, "access");
 });
@@ -114,7 +117,7 @@ test("a refresh token sent as Bearer returns 401", async () => {
 
 test("a validly signed JWT with typ refresh or without typ returns 401", async () => {
   const s = await signupTenant(getApp(), "acme", "ada@acme.com");
-  const claims = { sub: String(s.adminId), tid: s.tenantId, role: "admin" };
+  const claims = { sub: s.adminId, tid: s.tenantId, role: "admin" };
   for (const extra of [{ typ: "refresh" }, {}]) {
     const token = getApp().jwt.sign({ ...claims, ...extra } as never);
     const res = await send(getApp(), { method: "GET", url: "/users/me", headers: bearer(token) });
@@ -130,7 +133,7 @@ test("a JWT signed with another secret returns 401", async () => {
   });
   await other.ready();
   const token = other.jwt.sign({
-    sub: String(s.adminId),
+    sub: s.adminId,
     tid: s.tenantId,
     role: "admin" as never,
     typ: "access",

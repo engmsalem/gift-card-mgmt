@@ -21,7 +21,7 @@ export class UserService {
   }
 
   /** The tenant always comes from the caller's token, never from the request body. */
-  async createUser(tenantId: number, input: CreateUserInput) {
+  async createUser(tenantId: string, input: CreateUserInput) {
     const email = normalizeEmail(input.email);
     assertValidEmail(email);
     assertPasswordFitsBcrypt(input.password);
@@ -42,11 +42,11 @@ export class UserService {
     );
   }
 
-  listUsers(tenantId: number): Promise<User[]> {
-    return this.userRepository.find({ where: { tenantId }, order: { id: "ASC" } });
+  listUsers(tenantId: string): Promise<User[]> {
+    return this.userRepository.find({ where: { tenantId }, order: { createdAt: "ASC", id: "ASC" } });
   }
 
-  async getUser(tenantId: number, id: number): Promise<User> {
+  async getUser(tenantId: string, id: string): Promise<User> {
     const user = await this.userRepository.findOneBy({ id, tenantId });
     if (!user) throw new NotFoundError("User not found");
     return user;

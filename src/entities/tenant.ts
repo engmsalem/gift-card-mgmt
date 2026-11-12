@@ -5,17 +5,11 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from "typeorm";
-import { bigintTransformer } from "./transformers";
 
 @Entity("tenants")
 export class Tenant {
-  @PrimaryColumn({
-    type: "bigint",
-    generated: "identity",
-    generatedIdentity: "BY DEFAULT",
-    transformer: bigintTransformer,
-  })
-  id: number;
+  @PrimaryColumn({ type: "uuid", default: () => "uuidv7()" })
+  id: string;
 
   @Column({ type: "varchar", length: 100 })
   name: string;

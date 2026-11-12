@@ -85,6 +85,9 @@ export async function resetDb(): Promise<void> {
   await admin.query(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
 }
 
+/** UUID with version nibble 7 (time-ordered ids) and RFC 4122 variant. */
+export const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const FORBIDDEN_IN_RESPONSES = ["passwordHash", "password_hash", "$2b$"];
 
 /** app.inject that also fails the test if the response could leak a password hash. */
@@ -100,8 +103,8 @@ export async function send(
 }
 
 export interface SignupResult {
-  tenantId: number;
-  adminId: number;
+  tenantId: string;
+  adminId: string;
   email: string;
   password: string;
 }
@@ -181,15 +184,15 @@ export function useTestApp(): () => FastifyInstance {
 }
 
 export interface UserDto {
-  id: number;
-  tenantId: number;
+  id: string;
+  tenantId: string;
   name: string;
   email: string;
   role: string;
 }
 
 export interface TenantDto {
-  id: number;
+  id: string;
   name: string;
   subdomain: string;
 }

@@ -9,9 +9,9 @@ export {};
 declare module "@fastify/jwt" {
   interface FastifyJWT {
     // Access token claims
-    payload: { sub: string; tid: number; role: Role; typ: string };
+    payload: { sub: string; tid: string; role: Role; typ: string };
     // `request.user` after `request.jwtVerify()` (built by formatUser in src/plugins/jwt.ts)
-    user: { id: number; tenantId: number; role: Role };
+    user: { id: string; tenantId: string; role: Role };
   }
 }
 

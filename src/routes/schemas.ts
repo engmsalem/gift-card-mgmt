@@ -3,8 +3,8 @@
 export const userResponse = {
   type: "object",
   properties: {
-    id: { type: "integer" },
-    tenantId: { type: "integer" },
+    id: { type: "string", format: "uuid" },
+    tenantId: { type: "string", format: "uuid" },
     name: { type: "string" },
     email: { type: "string" },
     role: { type: "string", enum: ["admin", "staff"] },
@@ -16,7 +16,7 @@ export const userResponse = {
 export const tenantResponse = {
   type: "object",
   properties: {
-    id: { type: "integer" },
+    id: { type: "string", format: "uuid" },
     name: { type: "string" },
     subdomain: { type: "string" },
     createdAt: { type: "string", format: "date-time" },

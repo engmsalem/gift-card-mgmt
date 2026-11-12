@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   PASSWORD,
+  UUID_V7,
   bearer,
   login,
   send,
@@ -27,6 +28,8 @@ test("admin creates a staff user in their own tenant", async () => {
   assert.equal(user.role, "staff");
   assert.equal(user.email, "sam@acme.com");
   assert.equal(user.tenantId, s.tenantId);
+  assert.match(user.id, UUID_V7);
+  assert.match(user.tenantId, UUID_V7);
 
   // the invited user can log in
   const staff = await login(getApp(), "sam@acme.com");
@@ -118,7 +121,7 @@ test("staff can not create or list users (403) but can read their profile", asyn
   assert.equal(me.json<UserDto>().role, "staff");
 });
 
-test("GET /users lists only the caller's tenant, ordered by id", async () => {
+test("GET /users lists only the caller's tenant, ordered by creation time", async () => {
   const a = await signupTenant(getApp(), "acme", "ada@acme.com");
   const b = await signupTenant(getApp(), "bravo", "bea@bravo.com");
   const adminA = await login(getApp(), a.email);
@@ -156,6 +159,43 @@ test("GET /users lists only the caller's tenant, ordered by id", async () => {
     listB.json<UserDto[]>().map((u) => u.email),
     ["bea@bravo.com", "b2@bravo.com"]
   );
-  const ids: number[] = listA.json<UserDto[]>().map((u) => u.id);
-  assert.deepEqual(ids, [...ids].sort((x, y) => x - y));
+  // UUIDv7 ids are time-ordered, so creation order is also id order
+  const ids = listA.json<UserDto[]>().map((u) => u.id);
+  assert.deepEqual(ids, [...ids].sort());
+});
+
+test("a token can not reach another tenant's user", async () => {
+  const a = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const b = await signupTenant(getApp(), "bravo", "bea@bravo.com");
+
+  // Each admin sees only their own profile
+  const adminB = await login(getApp(), b.email);
+  const me = await send(getApp(), {
+    method: "GET",
+    url: "/users/me",
+    headers: bearer(adminB.accessToken),
+  });
+  assert.equal(me.json<UserDto>().id, b.adminId);
+
+  // A validly signed token pairing A's user id with B's tenant id resolves to nothing:
+  // lookups are always scoped by tenant, so the id alone grants no access.
+  const forged = getApp().jwt.sign({
+    sub: a.adminId,
+    tid: b.tenantId,
+    role: "admin" as never,
+    typ: "access",
+  });
+  const res = await send(getApp(), { method: "GET", url: "/users/me", headers: bearer(forged) });
+  assert.equal(res.statusCode, 404);
+
+  // B's admin creating a user never lands in A's tenant
+  await send(getApp(), {
+    method: "POST",
+    url: "/users",
+    headers: bearer(adminB.accessToken),
+    payload: { name: "B2", email: "b2@bravo.com", password: PASSWORD },
+  });
+  const adminA = await login(getApp(), a.email);
+  const listA = await send(getApp(), { method: "GET", url: "/users", headers: bearer(adminA.accessToken) });
+  assert.deepEqual(listA.json<UserDto[]>().map((u) => u.email), ["ada@acme.com"]);
 });
