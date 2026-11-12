@@ -1,21 +1,27 @@
-import { DataSource } from "typeorm";
+import "reflect-metadata";
+import { DataSource, DataSourceOptions } from "typeorm";
+import { config } from "./config";
+import { RefreshToken } from "./entities/refresh-token";
+import { Tenant } from "./entities/tenant";
 import { User } from "./entities/user";
-import "dotenv/config";
 
+// Shared by the app and migration data sources. Credentials are added by each caller.
+// The schema is owned by src/migrations; synchronize is never enabled.
+export const baseOptions = {
+  type: "postgres",
+  host: config.dbHost,
+  port: config.dbPort,
+  database: config.dbDatabase,
+  synchronize: false,
+  logging: config.dbLogging,
+  entities: [Tenant, User, RefreshToken],
+  // Resolves to .ts under ts-node (src/) and .js when compiled (dist/)
+  migrations: [__dirname + "/migrations/*.{ts,js}"],
+} as const satisfies DataSourceOptions;
+
+// Runs as the least-privileged app role (no DDL).
 export const AppDataSource = new DataSource({
-  type: "mariadb",
-  host: process.env.DB_HOST || "localhost",
-  port: parseInt(process.env.DB_PORT || "5432"),
-  username: process.env.DB_USERNAME,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_DATABASE,
-  synchronize: process.env.NODE_ENV !== "production",
-  logging: process.env.NODE_ENV !== "production",
-  entities: [User],
-  migrations: [],
-  subscribers: [],
+  ...baseOptions,
+  username: config.dbUsername,
+  password: config.dbPassword,
 });
-
-if (!process.env.DB_USERNAME || !process.env.DB_PASSWORD) {
-  throw new Error("Database configuration missing");
-}
