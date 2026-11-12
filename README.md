@@ -95,7 +95,7 @@ Both the app and `docker-compose.yml` read this file.
 | `DB_DATABASE`          | yes      | none                         | e.g. `gift_card_mgmt`. Docker also creates `<DB_DATABASE>_test` for integration tests |
 | `DB_USERNAME`          | yes      | none                         | **App role**: read/write data only, cannot change the schema |
 | `DB_PASSWORD`          | yes      | none                         | Password for the app role |
-| `DB_ADMIN_USERNAME`    | yes\*    | `DB_USERNAME`                | **Admin role** (schema owner), used only by migrations. \*Required by Docker Compose |
+| `DB_ADMIN_USERNAME`    | yes\*    | `DB_USERNAME`                | **Admin role** (schema owner), used only by migrations. Set both admin variables or neither (neither = use the app credentials). \*Required by Docker Compose, and must differ from `DB_USERNAME` |
 | `DB_ADMIN_PASSWORD`    | yes\*    | `DB_PASSWORD`                | Password for the admin role |
 | `JWT_SECRET`           | yes      | none                         | At least 32 characters. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement |
@@ -179,7 +179,7 @@ curl localhost:3000/users/me -H "Authorization: Bearer <accessToken>"
 Rules:
 - `subdomain`: 3–50 characters, lowercase letters, digits and hyphens. `password`: 8–72 characters. Emails are trimmed and lowercased.
 - Unknown body fields are rejected with `400`. The tenant always comes from the caller's token, never from the body.
-- Errors use `{ "error": "<message>" }` with `400` (validation), `401` (missing/invalid token or credentials), `403` (wrong role), `404`, `409` (duplicate), `429` (rate limit).
+- Errors use `{ "error": "<message>" }` with `400` (validation), `401` (missing/invalid token or credentials), `403` (wrong role), `404`, `409` (duplicate), `429` (rate limit), `503` with `Retry-After` (a concurrent database conflict; safe to retry).
 - Password hashes are never returned (excluded from queries and stripped by response schemas).
 
 ### Tokens
@@ -230,7 +230,7 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 22 unit tests, 57 integration tests and the migration drift check._
+_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 26 unit tests, 61 integration tests and the migration drift check._
 
 ### Known limitations
 
