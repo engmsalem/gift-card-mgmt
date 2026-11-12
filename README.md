@@ -256,7 +256,7 @@ _Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 27 
 3. Subdomain-based tenant resolution and per-tenant settings.
 4. User management endpoints (update role, deactivate, reset password), with session-aware access tokens so role changes and logout take effect immediately.
 5. Per-tenant emails with tenant-aware login. Per-account login throttling and a shared rate-limit store (e.g. Redis) for multiple instances. Pagination for list endpoints.
-6. API documentation (OpenAPI via `@fastify/swagger`).
+6. API documentation (OpenAPI via `@fastify/swagger`).
 
 ## Author
 
