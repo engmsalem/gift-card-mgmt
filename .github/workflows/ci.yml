@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, build, unit tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  integration:
+    name: Integration tests (PostgreSQL, Node 24)
+    runs-on: ubuntu-latest
+    # CI-only throwaway values, not secrets
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_DATABASE: gcm
+      DB_ADMIN_USERNAME: gcm_owner
+      DB_ADMIN_PASSWORD: ci-throwaway-admin-password
+      DB_USERNAME: gcm_app
+      DB_PASSWORD: ci-throwaway-app-password
+      JWT_SECRET: ci-throwaway-jwt-secret-0123456789abcdef
+      PORT: "3000"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # The repo's own compose file, so db/init/01-app-role.sh (app role + _test database) is exercised
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait
+      - run: npm ci
+      - name: Apply migrations
+        run: npm run migration:run
+      - name: Check entities match the migrated schema
+        run: npm run migration:check
+      - name: Integration tests
+        run: npm run test:integration
+      - run: npm run build
+      - name: Boot smoke test (as the app role)
+        run: |
+          node dist/index.js > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -s -o /dev/null "http://127.0.0.1:${PORT}/users/me" && break
+            sleep 1
+          done
+          status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/users/me")
+          echo "GET /users/me without a token -> ${status}"
+          if [ "${status}" != "401" ]; then
+            echo "expected 401"
+            cat server.log
+            exit 1
+          fi
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker compose down -v
