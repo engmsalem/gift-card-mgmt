@@ -113,8 +113,8 @@ Both the app and `docker-compose.yml` read this file.
 | `JWT_SECRET`           | yes      | none                         | At least 32 characters. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
 | `CARD_ENCRYPTION_KEY`  | yes      | none                         | Encrypts gift card numbers and PINs (AES-256-GCM). 64 hex characters: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. See [Card keys](#card-keys) |
 | `CARD_LOOKUP_KEY`      | yes      | none                         | Keyed hash (HMAC-SHA256) for finding cards by number. Same format, must differ from the encryption key |
-| `CARD_ENCRYPTION_KEY_ID` | no     | `1`                          | Integer 1–32767. Change only together with the key |
-| `CARD_LOOKUP_KEY_ID`   | no       | `1`                          | Integer 1–32767. Change only together with the key |
+| `CARD_ENCRYPTION_KEY_ID` | no     | `1`                          | Integer 1–32767. Don't change it once cards exist (see [Card keys](#card-keys)) |
+| `CARD_LOOKUP_KEY_ID`   | no       | `1`                          | Integer 1–32767. Don't change it once cards exist (see [Card keys](#card-keys)) |
 | `GIFT_CARD_LINK_BASE_URL` | no*   | `http://localhost:3000/gift` | Where gift emails link to (the landing page); the token is appended as `#token=...`. *Required in production, and must be `https` |
 | `GIFT_CARD_DEV_PRINT_LINKS` | no  | `false`                      | `true` prints gift links to the console so you can open them by hand. Refused unless `NODE_ENV=development` |
 | `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement with its parameters. Refused when `NODE_ENV=production` |
@@ -146,7 +146,7 @@ GIFT_CARD_DEV_PRINT_LINKS=true
 #### Card keys
 
 - **Back up both card keys (e.g. in a secret manager) before the first start.** The first start records a check value for each key id. After that, starting with a different key under the same id fails with `CARD_ENCRYPTION_KEY does not match the key recorded for key id 1`. A lost encryption key means the stored card numbers and PINs can't be read again.
-- To use a new key, give it a new id (`CARD_..._KEY_ID`). Re-encrypting existing cards under a new key (rotation) isn't built yet.
+- **Don't change either key or its id once cards exist.** Every card records the ids of the keys that protect it, and the app holds one key of each kind. Re-encrypting existing cards under a new key (rotation) isn't built yet. So the startup check refuses to start if any card uses an id other than the loaded `CARD_ENCRYPTION_KEY_ID` / `CARD_LOOKUP_KEY_ID`; the error names the variable and the ids. The fix is to restore the original key and id. A new key with a new id is only safe while no cards exist.
 - **Key-check reset:** if a check value was recorded for a key you never used for real cards, delete its row from `gift_card_key_checks` as the admin role. The startup check refuses this situation if any card still uses that key id.
 - The published test and CI keys in this repo are refused when `NODE_ENV=production`.
 
@@ -229,7 +229,7 @@ All need a Bearer token except the reveal link. "Global" means the default 100 r
 | POST  | `/gift-cards/redeem` | admin, staff | `{ cardNumber, pin?, amount, idempotencyKey, externalReference? }` | `201 { transaction, card }`; replay `200`. 30 / minute per user |
 | POST  | `/gift-card-transactions/:id/refunds` | admin | `{ amount, idempotencyKey }` | Refund part or all of a redemption |
 | POST  | `/gift-cards/:id/suspend`, `/resume`, `/void`, `/unlock` | admin | none | `200 { card, delivery }`. Repeating an action that's already in effect returns `200` |
-| POST  | `/gift-cards/:id/resend` | admin, staff | `{ recipient?: { name?, email? } }` | New link, old one stops working. Only admins may change the recipient. 10 / minute per user |
+| POST  | `/gift-cards/:id/resend` | admin, staff | `{ recipient?: { name?, email? } }` | New link, old one stops working. An email scheduled for later keeps its `sendAt`. Only admins may change the recipient. 10 / minute per user |
 | POST  | `/gift-card-links/reveal` | public | `{ token }` | `200` card number, PIN, balance, sender and message. 30 / minute per IP, `Cache-Control: no-store` |
 
 Amounts are integers in the currency's minor unit (cents for CAD; KWD, BHD and OMR have 3 decimals). Responses include `currencyExponent` so clients can format them. Card numbers and PINs only ever appear in the reveal response; everywhere else a card shows `last4` and `referenceNumber`.
@@ -283,14 +283,16 @@ npm run tokens:purge          # ts-node
 npm run tokens:purge:prod     # compiled dist/ files
 ```
 
-Gift card emails are sent by a dispatcher. Issuing and resending try to send right away; run the dispatch script **every minute** (cron or a scheduled task) to send scheduled emails and retry failed ones:
+Gift card emails are sent by a dispatcher. Issuing and resending try to send right away when the email is due; run the dispatch script **every minute** (cron or a scheduled task) to send scheduled emails and retry failed ones:
 
 ```bash
 npm run deliveries:dispatch          # ts-node
 npm run deliveries:dispatch:prod     # compiled dist/ files
 ```
 
-It needs only the database settings and `GIFT_CARD_LINK_BASE_URL`, not the card keys or `JWT_SECRET`.
+It needs only the database settings and `GIFT_CARD_LINK_BASE_URL`, not the card keys or `JWT_SECRET`. It exits with code 1 if the database fails, so the scheduler can alert you. A failed send to the email provider is not an error: it's retried with backoff and marked `failed` after 5 attempts. A send attempted while issuing or resending never fails that request.
+
+**Production needs an email provider.** None is built yet, so with `NODE_ENV=production` both the API and the dispatch script refuse to start. Otherwise production would mark gift emails as sent without delivering them, and recipients' links would be lost.
 
 **Deploy order.** Run migrations before starting a new version: the API checks the card keys against `gift_card_key_checks` at startup and refuses to start without that table. Note that `DB_LOGGING=true` now stops the API from starting in production, so unset it before deploying.
 
@@ -316,13 +318,13 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-13. All checks pass locally: lint, typecheck, build, 129 unit tests, 207 integration tests and the migration drift check._
+_Last reviewed: 2026-11-13. All checks pass locally: lint, typecheck, build, 138 unit tests, 221 integration tests and the migration drift check._
 
 ### Known limitations
 
-- **Gift emails are only logged, not sent.** There's no email provider yet; the default sender logs the delivery id and recipient domain. Before adding one: per-tenant send caps (so the API can't be used to send unwanted email) and HTML-escaped templates.
+- **Gift emails are only logged, not sent.** There's no email provider yet; the default sender logs the delivery id and recipient domain. Because of this, the app refuses to start with `NODE_ENV=production`. Before adding a provider: per-tenant send caps (so the API can't be used to send unwanted email) and HTML-escaped templates.
 - **No card listing or search**, and no public balance check (recipients use their link). List endpoints will come with pagination.
-- **No key rotation.** A new key needs a new key id; re-encrypting existing cards isn't built.
+- **No key rotation.** Card keys can't be changed once cards exist; re-encrypting existing cards isn't built (see [Card keys](#card-keys)).
 - **No reloads, no payment taking, no physical cards, single currency per card.** Expiry rules beyond "promotional only" (e.g. for GCC markets) need a per-country rules engine and a legal review per market.
 - **Card lookup timing.** An unknown card number answers slightly faster than a known one with a wrong PIN. The rate limits and the PIN lockout make this impractical to exploit, and it's an accepted residual.
 - **No subdomain routing.** Tenants have a `subdomain`, but requests aren't resolved by `Host` header yet. The tenant comes from the access token.
@@ -341,13 +343,22 @@ _Last reviewed: 2026-11-13. All checks pass locally: lint, typecheck, build, 129
 
 ## Roadmap
 
-1. A real email provider for gift deliveries (with send caps and escaped templates), and the recipient landing page.
-2. Gift card listing and search with pagination; card key rotation.
-3. Subdomain-based tenant resolution and per-tenant settings.
-4. User management endpoints (update role, deactivate, reset password), with session-aware access tokens so role changes and logout take effect immediately.
-5. Per-tenant emails with tenant-aware login. Per-account login throttling and a shared rate-limit store (e.g. Redis) for multiple instances. Pagination for list endpoints.
-6. Reloads, payment taking, and per-country gift card rules for GCC markets.
-7. API documentation (OpenAPI via `@fastify/swagger`).
+Before production:
+
+1. A real email provider for gift deliveries, with per-tenant send caps and HTML-escaped templates.
+2. The recipient landing page that gift links open.
+3. Sessions: session-aware access tokens, so a role change or logout takes effect immediately. Plus user management endpoints (update role, deactivate, reset password).
+4. Tenant-aware login: per-tenant emails (which also closes the cross-tenant email check) and subdomain-based tenant resolution. It changes the login API, so it should land before outside clients integrate.
+5. Card key rotation: re-encrypting existing cards under a new key.
+6. A shared rate-limit store (e.g. Redis) for multiple instances, and per-account login throttling.
+
+After launch:
+
+7. Gift card listing and search, and pagination for list endpoints (including `GET /users`).
+8. API documentation (OpenAPI via `@fastify/swagger`).
+9. Reloads and payment taking.
+10. GCC markets: per-country gift card rules, a legal review per market, 3-decimal currencies.
+11. On client demand: physical cards, a public balance check, cross-currency.
 
 ## Author
 

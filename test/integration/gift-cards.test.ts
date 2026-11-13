@@ -1021,3 +1021,69 @@ test("concurrent voids serialize on the card lock: one void ledger row (staged)"
   assert.deepEqual((await ledger(card.id)).map((r) => r.type), ["issue", "void"]);
   assert.equal((await auditActions()).filter((x) => x === "gift_card.voided").length, 1);
 });
+
+// ---------- sendAt that passes `format: date-time` but is not a date ----------
+
+test("sendAt with a leap second (passes date-time, is not a Date) -> 400 and no card", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const res = await issue(a.admin, issueBody(programId, { sendAt: "2026-12-31T23:59:60Z" }));
+  assert.equal(res.statusCode, 400, res.body);
+  assert.deepEqual(res.json(), { error: "sendAt must be a valid date-time" });
+  assert.equal(await cardCount(), 0);
+});
+
+// ---------- Content-Type: application/json with an empty body ----------
+
+test("an empty body with Content-Type application/json: body-optional routes work, body-required routes 400", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { card } = await issueOk(a.admin, programId);
+  const json = { ...a.admin, "content-type": "application/json" };
+  const post = (url: string, headers: Record<string, string> = json) =>
+    send(getApp(), { method: "POST", url, headers, body: "" });
+
+  const suspended = await post(`/gift-cards/${card.id}/suspend`);
+  assert.equal(suspended.statusCode, 200, suspended.body);
+  assert.equal(suspended.json<CardWithDelivery>().card.status, "suspended");
+  for (const name of ["resume", "unlock", "void"]) {
+    const res = await post(`/gift-cards/${card.id}/${name}`);
+    assert.equal(res.statusCode, 200, `${name}: ${res.body}`);
+  }
+  // Resend of a voided card is a 409, which proves the route ran (a body 400 would come first)
+  const resend = await post(`/gift-cards/${card.id}/resend`);
+  assert.equal(resend.statusCode, 409, resend.body);
+
+  // A route whose schema requires a body still refuses an empty one
+  const issued = await post("/gift-cards");
+  assert.equal(issued.statusCode, 400, issued.body);
+  assert.equal(await cardCount(), 1);
+});
+
+test("resend with Content-Type application/json and an empty body works", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { card } = await issueOk(a.admin, programId);
+  const res = await send(getApp(), {
+    method: "POST",
+    url: `/gift-cards/${card.id}/resend`,
+    headers: { ...a.admin, "content-type": "application/json" },
+    body: "",
+  });
+  assert.equal(res.statusCode, 200, res.body);
+});
+
+test("malformed JSON is still a 400", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { card } = await issueOk(a.admin, programId);
+  for (const url of ["/gift-cards", `/gift-cards/${card.id}/suspend`]) {
+    const res = await send(getApp(), {
+      method: "POST",
+      url,
+      headers: { ...a.admin, "content-type": "application/json" },
+      body: "{not json",
+    });
+    assert.equal(res.statusCode, 400, `${url}: ${res.body}`);
+  }
+});

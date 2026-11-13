@@ -8,6 +8,10 @@ const VARIABLE: Record<Purpose, string> = {
   encryption: "CARD_ENCRYPTION_KEY",
   lookup: "CARD_LOOKUP_KEY",
 };
+const VARIABLE_ID: Record<Purpose, string> = {
+  encryption: "CARD_ENCRYPTION_KEY_ID",
+  lookup: "CARD_LOOKUP_KEY_ID",
+};
 // Which gift_cards column records the key id each purpose was used with
 const CARD_KEY_COLUMN: Record<Purpose, string> = {
   encryption: "encryption_key_id",
@@ -19,10 +23,15 @@ const CARD_KEY_COLUMN: Record<Purpose, string> = {
  * id that cards already use but that has no recorded check value. The first boot with a key id
  * records its check value (two first boots at once converge: the first writer wins). Only check
  * values are stored, never keys. Messages name the variable and id, never a value.
+ *
+ * It also refuses a loaded key id when any card was written under a different id: those cards could
+ * not be decrypted or looked up. Key rotation is not built, so the only remedy is the original key
+ * and id.
  */
 export async function verifyCardKeys(db: DataSource, cardCrypto: CardCrypto): Promise<void> {
   for (const { purpose, keyId, checkValue } of cardCrypto.keyCheckValues()) {
     const variable = VARIABLE[purpose];
+    await refuseOrphanedKeyIds(db, purpose, keyId);
     let stored = await readCheckValue(db, purpose, keyId);
 
     if (stored === null) {
@@ -47,9 +56,24 @@ export async function verifyCardKeys(db: DataSource, cardCrypto: CardCrypto): Pr
 
     if (stored === null || stored.length !== checkValue.length || !timingSafeEqual(stored, checkValue)) {
       throw new Error(
-        `${variable} does not match the key recorded for key id ${keyId}; use the original key or a new key id`
+        `${variable} does not match the key recorded for key id ${keyId}; use the original key for this id (a new key id is only safe while no cards exist; key rotation is not built yet)`
       );
     }
+  }
+}
+
+async function refuseOrphanedKeyIds(db: DataSource, purpose: Purpose, loadedId: number): Promise<void> {
+  const column = CARD_KEY_COLUMN[purpose];
+  // CARD_KEY_COLUMN is a fixed internal map, not input; the list is capped so the message stays short
+  const rows: Record<string, number>[] = await db.query(
+    `SELECT DISTINCT ${column} AS key_id FROM gift_cards WHERE ${column} <> $1 ORDER BY 1 LIMIT 10`,
+    [loadedId]
+  );
+  if (rows.length > 0) {
+    const ids = rows.map((r) => r.key_id).join(", ");
+    throw new Error(
+      `Cards exist with ${purpose} key id ${ids} but ${VARIABLE_ID[purpose]} is ${loadedId}; restore the original ${VARIABLE[purpose]} and ${VARIABLE_ID[purpose]} (key rotation is not built yet)`
+    );
   }
 }
 

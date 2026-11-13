@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { isLuhnValid } from "../../src/gift-cards/card-number";
 import { hashDeliveryToken } from "../../src/gift-cards/delivery-token";
+import { dispatchAllDue } from "../../src/scripts/dispatch-deliveries";
 import { DeliveryDispatcher, type DispatcherLog } from "../../src/services/deliveryDispatcher";
 import {
   PASSWORD,
@@ -137,11 +138,17 @@ async function deliveryRow(id: string): Promise<DeliveryRow> {
   return row;
 }
 
-/** Makes a scheduled delivery due now. */
+/**
+ * Makes a scheduled delivery due now: its send date has been reached too (a resend keeps a send date
+ * that is still ahead, so a due delivery must not have one).
+ */
 async function makeDue(deliveryId: string): Promise<void> {
-  await adminQuery(`UPDATE gift_card_deliveries SET next_attempt_at = now() - interval '1 second' WHERE id = $1`, [
-    deliveryId,
-  ]);
+  await adminQuery(
+    `UPDATE gift_card_deliveries
+        SET next_attempt_at = now() - interval '1 second', send_at = LEAST(send_at, now() - interval '1 second')
+      WHERE id = $1`,
+    [deliveryId]
+  );
 }
 
 interface CapturedLog {
@@ -745,4 +752,68 @@ test("a voided card's link 404s", async () => {
   const res = await reveal(token);
   assert.equal(res.statusCode, 404);
   assert.deepEqual(res.json(), { error: "Link is invalid or has expired" });
+});
+
+// ---------- resend keeps the scheduled send date ----------
+
+test("resend of a delivery scheduled for later keeps send_at: still scheduled, nothing sent", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const sendAt = new Date(Date.now() + 30 * 24 * 3600_000).toISOString();
+  const { card, delivery } = await issueOk(a.admin, programId, { sendAt });
+  assert.equal(delivery.status, "scheduled");
+
+  const nextAttemptIsSendAt = async () => {
+    const [row] = (await adminQuery(
+      `SELECT next_attempt_at = send_at AS same, send_at FROM gift_card_deliveries WHERE id = $1`,
+      [delivery.id]
+    )) as { same: boolean; send_at: Date }[];
+    assert.equal(row.same, true, "next_attempt_at is the scheduled send date");
+    assert.equal(row.send_at.toISOString(), sendAt);
+  };
+
+  // Same recipient
+  const same = await resend(a.admin, card.id);
+  assert.equal(same.statusCode, 200, same.body);
+  assert.equal(same.json<{ delivery: DeliveryDto }>().delivery.status, "scheduled");
+  await nextAttemptIsSendAt();
+
+  // Admin changes the recipient
+  const changed = await resend(a.admin, card.id, { recipient: { email: "other@example.com" } });
+  assert.equal(changed.statusCode, 200, changed.body);
+  assert.equal(changed.json<{ delivery: DeliveryDto }>().delivery.status, "scheduled");
+  await nextAttemptIsSendAt();
+  assert.equal((await deliveryRow(delivery.id)).recipient_email, "other@example.com");
+
+  assert.equal(sender.messages.length, 0, "the sender was never called");
+});
+
+test("resend of a sent delivery whose send date has passed sends immediately", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { card, delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
+  await makeDue(delivery.id);
+  assert.equal(await makeDispatcher(sender, captureLog().log).dispatch({}), 1);
+  assert.equal(sender.messages.length, 1);
+
+  const res = await resend(a.admin, card.id);
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json<{ delivery: DeliveryDto }>().delivery.status, "sent");
+  assert.equal(sender.messages.length, 2);
+});
+
+// ---------- dispatch script path ----------
+
+test("dispatchAllDue: a sender failure is recorded for retry and does not reject", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
+  await makeDue(delivery.id);
+
+  const failing = new RecordingDeliverySender("throw");
+  assert.equal(await dispatchAllDue(makeDispatcher(failing, captureLog().log)), 1);
+  const row = await deliveryRow(delivery.id);
+  assert.equal(row.status, "scheduled");
+  assert.equal(row.attempts, 1);
+  assert.equal(row.last_error, "SenderDownError");
 });

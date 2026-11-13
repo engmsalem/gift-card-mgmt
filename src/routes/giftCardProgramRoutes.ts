@@ -6,12 +6,10 @@ import {
   GiftCardProgramService,
   UpdateProgramInput,
 } from "../services/giftCardProgramService";
-import { errorResponse, giftCardProgramResponse } from "./schemas";
+import { NO_CONTROL_CHARS, errorResponse, giftCardProgramResponse, idParams } from "./schemas";
 
 // Shape only (B-3): the business rules (supported currency, prefix, expiry, ...) live in
 // src/gift-cards/program-rules.ts and are applied by the service.
-const NO_CONTROL_CHARS = "^[^\u0000-\u001f\u007f]+$";
-
 const programFields = {
   name: { type: "string", minLength: 1, maxLength: 100, pattern: NO_CONTROL_CHARS },
   cardType: { type: "string", enum: ["paid", "promotional"] },
@@ -21,12 +19,6 @@ const programFields = {
   cardNumberLength: { type: "integer" },
   pinRequired: { type: "boolean" },
   maxValue: { type: "integer" },
-} as const;
-
-const idParams = {
-  type: "object",
-  required: ["id"],
-  properties: { id: { type: "string", format: "uuid" } },
 } as const;
 
 export default async function giftCardProgramRoutes(fastify: FastifyInstance) {

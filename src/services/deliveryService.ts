@@ -4,14 +4,18 @@ import type { GiftCardStatus } from "../entities/gift-card";
 import { Role } from "../enums/roles";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors";
 import type { CardCrypto } from "../gift-cards/card-crypto";
-import { effectiveStatus } from "../gift-cards/card-state";
+import {
+  CARD_EXPIRED_MESSAGE,
+  CARD_VOIDED_MESSAGE,
+  effectiveStatus,
+} from "../gift-cards/card-state";
 import { hashDeliveryToken } from "../gift-cards/delivery-token";
 import { maskEmail } from "../gift-cards/mask";
 import { currencyExponent } from "../gift-cards/money";
 import { writeAudit } from "./audit";
 import type { DeliveryDispatcher } from "./deliveryDispatcher";
 import type { CallerContext } from "./giftCardProgramService";
-import { GiftCardDeliveryResponse, loadDelivery } from "./giftCardService";
+import { CARD_NOT_FOUND_MESSAGE, GiftCardDeliveryResponse, loadDelivery } from "./giftCardService";
 import { returningRows } from "./sql";
 
 export interface ResendContext extends CallerContext {
@@ -83,10 +87,10 @@ export class DeliveryService {
            FROM gift_cards WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
         [cardId, ctx.tenantId]
       );
-      if (!card) throw new NotFoundError("Gift card not found");
+      if (!card) throw new NotFoundError(CARD_NOT_FOUND_MESSAGE);
       const status = effectiveStatus({ status: card.status, isExpired: card.is_expired });
-      if (status === "voided") throw new ConflictError("Card is voided");
-      if (status === "expired") throw new ConflictError("Card has expired");
+      if (status === "voided") throw new ConflictError(CARD_VOIDED_MESSAGE);
+      if (status === "expired") throw new ConflictError(CARD_EXPIRED_MESSAGE);
 
       const [delivery] = await returningRows<{ id: string; recipient_name: string; recipient_email: string }>(
         em,
@@ -104,10 +108,12 @@ export class DeliveryService {
         throw new ForbiddenError("Only an admin can change the recipient");
       }
 
+      // A delivery still scheduled for the future keeps its send date: GREATEST leaves the claim
+      // below (next_attempt_at <= now()) with nothing to take, so the response reports `scheduled`
       await em.query(
         `UPDATE gift_card_deliveries
-            SET recipient_name = $3, recipient_email = $4, status = 'scheduled', next_attempt_at = now(),
-                attempts = 0, claimed_at = NULL, last_error = NULL, token_hash = NULL,
+            SET recipient_name = $3, recipient_email = $4, status = 'scheduled',
+                next_attempt_at = GREATEST(send_at, now()), attempts = 0, claimed_at = NULL, last_error = NULL, token_hash = NULL,
                 token_expires_at = NULL, updated_at = now()
           WHERE id = $1 AND tenant_id = $2`,
         [delivery.id, ctx.tenantId, name, email]

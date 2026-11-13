@@ -47,6 +47,11 @@ export interface DeliveryDispatcherOptions {
 export interface DispatchInput {
   deliveryId?: string;
   limit?: number;
+  /**
+   * Rethrow a database failure instead of logging it. For the dispatch script only: a cron job must
+   * exit non-zero. Never set for the in-request call, which must not fail the HTTP request.
+   */
+  throwOnError?: boolean;
 }
 
 const DEFAULT_SEND_TIMEOUT_MS = 10_000;
@@ -119,9 +124,11 @@ export class DeliveryDispatcher {
 
   /**
    * Processes up to `limit` due deliveries (only `deliveryId` when given) and resolves with how many
-   * it claimed. Bounded (each send is under the timeout) and never throws: a failure of the database
-   * itself is logged and ends the pass, so a caller that already committed its change (issue, resend)
-   * is not failed by it. The delivery then stays due and is picked up by the next pass.
+   * it claimed. Bounded (each send is under the timeout) and, by default, never throws: a failure of
+   * the database itself is logged and ends the pass, so a caller that already committed its change
+   * (issue, resend) is not failed by it. The delivery then stays due and is picked up by the next
+   * pass. With `throwOnError` that failure is rethrown instead. A failed send is not a database
+   * failure: it is recorded for retry and never throws.
    */
   async dispatch(input: DispatchInput = {}): Promise<number> {
     const limit = input.limit ?? DEFAULT_LIMIT;
@@ -133,6 +140,7 @@ export class DeliveryDispatcher {
         claimed++;
         if (next !== "cancelled") await this.sendAndRecord(next);
       } catch (err) {
+        if (input.throwOnError) throw err;
         this.log.warn({ deliveryId: input.deliveryId, errName: errorName(err) }, "gift card dispatch pass failed");
         break;
       }

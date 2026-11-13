@@ -14,12 +14,14 @@ import {
   TransactionResult,
 } from "../services/redemptionService";
 import {
+  NO_CONTROL_CHARS,
   errorResponse,
   giftCardDeliveryOnlyResponse,
   giftCardLookupResponse,
   giftCardTransactionResponse,
   giftCardTransactionResultResponse,
   giftCardWithDeliveryResponse,
+  idParams,
 } from "./schemas";
 
 export interface GiftCardRoutesOptions {
@@ -30,19 +32,12 @@ export interface GiftCardRoutesOptions {
 
 // Shape only (B-3): the business rules (program state, amount cap, staff limit) live in
 // src/gift-cards/card-state.ts and are applied by the service.
-const NO_CONTROL_CHARS = "^[^\u0000-\u001f\u007f]+$";
 // A message may span lines (LF, CR) but holds no other control characters
 const MESSAGE_PATTERN = "^[^\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f]*$";
 const MAX_INT32 = 2147483647;
 const IDEMPOTENCY_KEY_PATTERN = "^[A-Za-z0-9_-]{16,64}$";
 const CARD_NUMBER_PATTERN = "^[0-9][0-9 -]{14,26}[0-9]$";
 const PIN_PATTERN = "^[0-9]{6}$";
-
-const idParams = {
-  type: "object",
-  required: ["id"],
-  properties: { id: { type: "string", format: "uuid" } },
-} as const;
 
 const name = { type: "string", minLength: 1, maxLength: 100, pattern: NO_CONTROL_CHARS } as const;
 

@@ -9,6 +9,8 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import type { CardCrypto } from "../gift-cards/card-crypto";
 import { generateCardNumber, generatePin, generateReferenceNumber, normalizeReferenceNumber } from "../gift-cards/card-number";
 import {
+  CARD_EXPIRED_MESSAGE,
+  CARD_NOT_ACTIVE_MESSAGE,
   Caller,
   CardSnapshot,
   Rejection,
@@ -96,6 +98,7 @@ export interface TransactionResponse {
   createdAt: Date;
 }
 
+export const CARD_NOT_FOUND_MESSAGE = "Gift card not found";
 export const IDEMPOTENCY_CONSTRAINT = "gift_card_transactions_tenant_id_idempotency_key_key";
 // A generated number or reference that lost a race against another issue; a retry draws new ones
 const GENERATION_CONSTRAINTS = ["gift_cards_card_number_hmac_key", "gift_cards_tenant_id_reference_number_key"];
@@ -237,17 +240,47 @@ export function toTransactionResponse(r: TransactionRow): TransactionResponse {
   };
 }
 
+/** One card of the tenant by id, with the API columns; `forUpdate` takes the row lock. */
+export async function findCard(
+  em: EntityManager,
+  tenantId: string,
+  id: string,
+  opts: { forUpdate?: boolean } = {}
+): Promise<CardRow | undefined> {
+  const [card] = await returningRows<CardRow>(
+    em,
+    `SELECT ${CARD_COLUMNS} FROM gift_cards c WHERE c.id = $1 AND c.tenant_id = $2${opts.forUpdate ? " FOR UPDATE" : ""}`,
+    [id, tenantId]
+  );
+  return card;
+}
+
 export function snapshot(r: CardRow): CardSnapshot {
   return { status: r.status, balance: r.balance, isExpired: r.is_expired };
 }
 
 export function rejectionError(reason: Rejection): ConflictError {
-  return new ConflictError(reason === "expired" ? "Card has expired" : "Card is not active");
+  return new ConflictError(reason === "expired" ? CARD_EXPIRED_MESSAGE : CARD_NOT_ACTIVE_MESSAGE);
 }
 
 /** Same idempotency key, different request. */
 export function idempotencyConflict(): ConflictError {
   return new ConflictError("Idempotency key already used with a different request");
+}
+
+// What issue() derives from the input before the transaction; `sendAt` is a normalized ISO string
+interface PreparedIssue {
+  recipientEmail: string;
+  requestHash: Buffer;
+  sendAt: string | null;
+}
+
+/** The instant as an ISO string, null when absent. Rejects a value that is not a real date. */
+function parseSendAt(sendAt: string | undefined): string | null {
+  if (sendAt === undefined) return null;
+  const date = new Date(sendAt);
+  if (Number.isNaN(date.getTime())) throw new BadRequestError("sendAt must be a valid date-time");
+  return date.toISOString();
 }
 
 export class GiftCardService {
@@ -267,6 +300,9 @@ export class GiftCardService {
   async issue(ctx: IssueContext, input: IssueInput): Promise<IssueResult> {
     const recipientEmail = normalizeEmail(input.recipient.email);
     assertValidEmail(recipientEmail);
+    // Parsed before hashing: a value that passes `format: date-time` can still be no date (a leap
+    // second), and must be a 400 rather than a RangeError
+    const sendAt = parseSendAt(input.sendAt);
     const requestHash = requestHashIssue({
       actorUserId: ctx.userId,
       programId: input.programId,
@@ -275,9 +311,9 @@ export class GiftCardService {
       recipientName: input.recipient.name,
       senderName: input.senderName,
       message: input.message,
-      sendAt: input.sendAt,
+      sendAt,
     });
-    const prepared = { recipientEmail, requestHash };
+    const prepared = { recipientEmail, requestHash, sendAt };
 
     const result = await this.issueWithRetries(ctx, input, prepared);
     // A replay changes nothing, so there is nothing to send
@@ -291,7 +327,7 @@ export class GiftCardService {
   private async issueWithRetries(
     ctx: IssueContext,
     input: IssueInput,
-    prepared: { recipientEmail: string; requestHash: Buffer }
+    prepared: PreparedIssue
   ): Promise<IssueResult> {
     for (let attempt = 1; ; attempt++) {
       try {
@@ -320,7 +356,7 @@ export class GiftCardService {
     em: EntityManager,
     ctx: IssueContext,
     input: IssueInput,
-    prepared: { recipientEmail: string; requestHash: Buffer }
+    prepared: PreparedIssue
   ): Promise<IssueResult> {
     // 1. Lock the program so a concurrent program update serializes with this issue
     const [program] = await returningRows<ProgramRow>(
@@ -427,7 +463,7 @@ export class GiftCardService {
     );
 
     // 9. Delivery
-    const sendAt = input.sendAt === undefined ? null : new Date(input.sendAt).toISOString();
+    const sendAt = prepared.sendAt;
     const [window] = await returningRows<{ ok: boolean }>(
       em,
       `SELECT ($1::timestamptz IS NULL OR $1::timestamptz <= now() + make_interval(days => $2::int)) AS ok`,
@@ -526,13 +562,13 @@ export class GiftCardService {
 
   async getCardByReference(tenantId: string, reference: string): Promise<CardWithDelivery> {
     const normalized = normalizeReferenceNumber(reference);
-    if (normalized === null) throw new NotFoundError("Gift card not found");
+    if (normalized === null) throw new NotFoundError(CARD_NOT_FOUND_MESSAGE);
     const [row] = await returningRows<{ id: string }>(
       this.app.db.manager,
       `SELECT id FROM gift_cards WHERE tenant_id = $1 AND reference_number = $2`,
       [tenantId, normalized]
     );
-    if (!row) throw new NotFoundError("Gift card not found");
+    if (!row) throw new NotFoundError(CARD_NOT_FOUND_MESSAGE);
     return this.loadCardAndDelivery(this.app.db.manager, tenantId, row.id);
   }
 
@@ -543,7 +579,7 @@ export class GiftCardService {
       `SELECT id FROM gift_cards WHERE id = $1 AND tenant_id = $2`,
       [id, tenantId]
     );
-    if (!card) throw new NotFoundError("Gift card not found");
+    if (!card) throw new NotFoundError(CARD_NOT_FOUND_MESSAGE);
     const rows = await returningRows<TransactionRow>(
       em,
       `SELECT id, gift_card_id, type, amount, currency, balance_after, related_transaction_id,
@@ -646,22 +682,14 @@ export class GiftCardService {
   // ---------- shared ----------
 
   private async lockCard(em: EntityManager, tenantId: string, id: string): Promise<CardRow> {
-    const [card] = await returningRows<CardRow>(
-      em,
-      `SELECT ${CARD_COLUMNS} FROM gift_cards c WHERE c.id = $1 AND c.tenant_id = $2 FOR UPDATE`,
-      [id, tenantId]
-    );
-    if (!card) throw new NotFoundError("Gift card not found");
+    const card = await findCard(em, tenantId, id, { forUpdate: true });
+    if (!card) throw new NotFoundError(CARD_NOT_FOUND_MESSAGE);
     return card;
   }
 
   private async loadCardAndDelivery(em: EntityManager, tenantId: string, cardId: string): Promise<CardWithDelivery> {
-    const [card] = await returningRows<CardRow>(
-      em,
-      `SELECT ${CARD_COLUMNS} FROM gift_cards c WHERE c.id = $1 AND c.tenant_id = $2`,
-      [cardId, tenantId]
-    );
-    if (!card) throw new NotFoundError("Gift card not found");
+    const card = await findCard(em, tenantId, cardId);
+    if (!card) throw new NotFoundError(CARD_NOT_FOUND_MESSAGE);
     return { card: toCardResponse(card), delivery: await loadDelivery(em, tenantId, cardId) };
   }
 }

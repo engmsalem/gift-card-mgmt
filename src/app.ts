@@ -3,8 +3,7 @@ import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { DataSource } from "typeorm";
 import type { Config } from "./config";
-import { ConsoleLinkDeliverySender } from "./delivery/console-link-sender";
-import { LogOnlyDeliverySender } from "./delivery/log-only-sender";
+import { selectDeliverySender } from "./delivery/select-sender";
 import { CardCrypto } from "./gift-cards/card-crypto";
 import errorHandler from "./plugins/error-handler";
 import jwtPlugin from "./plugins/jwt";
@@ -82,6 +81,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     });
     await verifyCardKeys(opts.dataSource, cardCrypto);
 
+    // Many clients send `Content-Type: application/json` with no body. Fastify answers that with a
+    // 400 before the route runs, which would break the routes whose body is optional (resend,
+    // suspend, ...). An empty body is parsed as no body; routes whose schema requires one still
+    // answer 400 (validation), and anything else goes to Fastify's own parser with its defaults.
+    const parseJson = app.getDefaultJsonParser("error", "error"); // the Fastify defaults, stated
+    app.removeContentTypeParser("application/json");
+    app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+      if (body === "") return done(null, undefined);
+      // The callback form (its type also allows a promise, which this parser never returns)
+      void parseJson(request, body as string, done);
+    });
+
     // Register plugins in order
     await app.register(errorHandler); // Register error handler first
     // CORS before rate limiting: its onRequest hook then sets CORS headers on every response
@@ -100,11 +111,14 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(userRoutes);
     await app.register(giftCardProgramRoutes);
 
-    // Composition root for delivery: the override, else the development console sender (config
-    // allows it only under NODE_ENV=development), else the log-only sender
-    const sender =
-      opts.giftCards?.deliverySender ??
-      (opts.config.giftCardDevPrintLinks ? new ConsoleLinkDeliverySender() : new LogOnlyDeliverySender(app.log));
+    // Composition root for delivery. Throws a ConfigError in production when there is no provider
+    // (see selectDeliverySender); the catch below closes the instance and rethrows.
+    const sender = selectDeliverySender({
+      override: opts.giftCards?.deliverySender,
+      nodeEnv: opts.config.nodeEnv,
+      devPrintLinks: opts.config.giftCardDevPrintLinks,
+      log: app.log,
+    });
     const dispatcher = new DeliveryDispatcher({
       db: opts.dataSource,
       sender,

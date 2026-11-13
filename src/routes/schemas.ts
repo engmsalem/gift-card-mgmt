@@ -24,6 +24,15 @@ export const tenantResponse = {
   },
 } as const;
 
+// Shape only (B-3): a printable string with no control characters
+export const NO_CONTROL_CHARS = "^[^\u0000-\u001f\u007f]+$";
+
+export const idParams = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", format: "uuid" } },
+} as const;
+
 export const errorResponse = {
   type: "object",
   properties: { error: { type: "string" } },

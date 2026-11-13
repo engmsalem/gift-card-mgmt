@@ -210,3 +210,50 @@ test("first boot racing another instance's uncommitted write converges on the fi
     await tx.rollback();
   }
 });
+
+test("cards under an encryption key id that is not loaded: boot refused naming the variable and id", async () => {
+  await bootAndClose();
+  await insertCardUsingKeys(2, 1);
+  const config = loadTestConfig();
+  await assert.rejects(buildTestApp(config), (err: Error) => {
+    assert.equal(
+      err.message,
+      "Cards exist with encryption key id 2 but CARD_ENCRYPTION_KEY_ID is 1; restore the original CARD_ENCRYPTION_KEY and CARD_ENCRYPTION_KEY_ID (key rotation is not built yet)"
+    );
+    return true;
+  });
+});
+
+test("cards under a lookup key id that is not loaded: boot refused naming the variable and id", async () => {
+  await bootAndClose();
+  await insertCardUsingKeys(1, 3);
+  await assert.rejects(buildTestApp(loadTestConfig()), (err: Error) => {
+    assert.equal(
+      err.message,
+      "Cards exist with lookup key id 3 but CARD_LOOKUP_KEY_ID is 1; restore the original CARD_LOOKUP_KEY and CARD_LOOKUP_KEY_ID (key rotation is not built yet)"
+    );
+    return true;
+  });
+});
+
+test("moving to a new key id while cards use the old one is refused", async () => {
+  await bootAndClose();
+  await insertCardUsingKeys(1, 1);
+  await assert.rejects(
+    buildTestApp(
+      loadTestConfig({
+        CARD_ENCRYPTION_KEY: OTHER_ENCRYPTION_KEY,
+        CARD_ENCRYPTION_KEY_ID: "2",
+        CARD_LOOKUP_KEY: OTHER_LOOKUP_KEY,
+        CARD_LOOKUP_KEY_ID: "2",
+      })
+    ),
+    /^Error: Cards exist with encryption key id 1 but CARD_ENCRYPTION_KEY_ID is 2;/
+  );
+});
+
+test("cards that all use the loaded key ids: boot succeeds", async () => {
+  await bootAndClose();
+  await insertCardUsingKeys(1, 1);
+  await bootAndClose();
+});

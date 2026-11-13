@@ -3,7 +3,15 @@ import { EntityManager } from "typeorm";
 import { ConflictError, NotFoundError } from "../errors";
 import type { CardCrypto } from "../gift-cards/card-crypto";
 import { normalizeCardNumber } from "../gift-cards/card-number";
-import { PIN_LOCK_MINUTES, decidePinAttempt, decideRedeem, decideRefund } from "../gift-cards/card-state";
+import {
+  CARD_EXPIRED_MESSAGE,
+  CARD_NOT_ACTIVE_MESSAGE,
+  INSUFFICIENT_BALANCE_MESSAGE,
+  PIN_LOCK_MINUTES,
+  decidePinAttempt,
+  decideRedeem,
+  decideRefund,
+} from "../gift-cards/card-state";
 import { requestHashRedeem, requestHashRefund } from "../gift-cards/request-hash";
 import { writeAudit } from "./audit";
 import type { CallerContext } from "./giftCardProgramService";
@@ -14,6 +22,7 @@ import {
   IDEMPOTENCY_CONSTRAINT,
   TransactionResponse,
   TransactionRow,
+  findCard,
   idempotencyConflict,
   rejectionError,
   snapshot,
@@ -83,11 +92,11 @@ function throwFor(outcome: Exclude<RedeemOutcome, { kind: "done" }>): never {
     case "idempotency_conflict":
       throw idempotencyConflict();
     case "expired":
-      throw new ConflictError("Card has expired");
+      throw new ConflictError(CARD_EXPIRED_MESSAGE);
     case "not_active":
-      throw new ConflictError("Card is not active");
+      throw new ConflictError(CARD_NOT_ACTIVE_MESSAGE);
     case "insufficient_balance":
-      throw new ConflictError("Insufficient balance");
+      throw new ConflictError(INSUFFICIENT_BALANCE_MESSAGE);
   }
 }
 
@@ -247,11 +256,7 @@ export class RedemptionService {
     if (!original) throw new NotFoundError("Transaction not found");
 
     // 2. Lock the card
-    const [card] = await returningRows<CardRow>(
-      em,
-      `SELECT ${CARD_COLUMNS} FROM gift_cards c WHERE c.id = $1 AND c.tenant_id = $2 FOR UPDATE`,
-      [original.gift_card_id, ctx.tenantId]
-    );
+    const card = await findCard(em, ctx.tenantId, original.gift_card_id, { forUpdate: true });
     // The ledger row references the card by foreign key
     if (!card) throw new Error("transaction has no gift card");
 
@@ -403,11 +408,7 @@ export class RedemptionService {
   }
 
   private async loadCard(em: EntityManager, tenantId: string, cardId: string): Promise<GiftCardResponse> {
-    const [card] = await returningRows<CardRow>(
-      em,
-      `SELECT ${CARD_COLUMNS} FROM gift_cards c WHERE c.id = $1 AND c.tenant_id = $2`,
-      [cardId, tenantId]
-    );
+    const card = await findCard(em, tenantId, cardId);
     // Callers pass an id they just read under the card's foreign key
     if (!card) throw new Error("gift card disappeared");
     return toCardResponse(card);

@@ -22,6 +22,12 @@ export function effectiveStatus(card: Pick<CardSnapshot, "status" | "isExpired">
 
 export type Rejection = "expired" | "not_active";
 
+// Rejection messages, defined once: clients and the identical-404 behaviour depend on the exact text
+export const CARD_EXPIRED_MESSAGE = "Card has expired";
+export const CARD_NOT_ACTIVE_MESSAGE = "Card is not active";
+export const CARD_VOIDED_MESSAGE = "Card is voided";
+export const INSUFFICIENT_BALANCE_MESSAGE = "Insufficient balance";
+
 function rejectionFor(status: CardStatus): Rejection {
   return status === "expired" ? "expired" : "not_active";
 }

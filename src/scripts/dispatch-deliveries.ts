@@ -2,8 +2,7 @@ import "dotenv/config";
 import "reflect-metadata";
 import { loadDispatchConfig } from "../config";
 import { createDataSource } from "../data-source";
-import { ConsoleLinkDeliverySender } from "../delivery/console-link-sender";
-import { LogOnlyDeliverySender } from "../delivery/log-only-sender";
+import { selectDeliverySender } from "../delivery/select-sender";
 import { DeliveryDispatcher, DispatcherLog } from "../services/deliveryDispatcher";
 
 const BATCH_SIZE = 50;
@@ -14,11 +13,14 @@ const jsonLog: DispatcherLog = {
   warn: (o, m) => console.log(JSON.stringify({ level: "warn", msg: m, ...o })),
 };
 
-/** Dispatches batches until a pass claims nothing. Returns how many deliveries it claimed. */
+/**
+ * Dispatches batches until a pass claims nothing. Returns how many deliveries it claimed. A database
+ * failure rejects (so the cron job exits non-zero); a failed send does not, it is recorded for retry.
+ */
 export async function dispatchAllDue(dispatcher: DeliveryDispatcher): Promise<number> {
   let total = 0;
   for (;;) {
-    const claimed = await dispatcher.dispatch({ limit: BATCH_SIZE });
+    const claimed = await dispatcher.dispatch({ limit: BATCH_SIZE, throwOnError: true });
     if (claimed === 0) return total;
     total += claimed;
   }
@@ -26,13 +28,18 @@ export async function dispatchAllDue(dispatcher: DeliveryDispatcher): Promise<nu
 
 async function main(): Promise<void> {
   const config = loadDispatchConfig(process.env);
+  // Before connecting: production without an email provider is refused (a ConfigError)
+  const sender = selectDeliverySender({
+    nodeEnv: config.nodeEnv,
+    devPrintLinks: config.giftCardDevPrintLinks,
+    log: jsonLog,
+  });
   const dataSource = createDataSource(config, "app");
   await dataSource.initialize();
   try {
     const dispatcher = new DeliveryDispatcher({
       db: dataSource,
-      // Development only: config refuses GIFT_CARD_DEV_PRINT_LINKS=true under any other NODE_ENV
-      sender: config.giftCardDevPrintLinks ? new ConsoleLinkDeliverySender() : new LogOnlyDeliverySender(jsonLog),
+      sender,
       linkBaseUrl: config.giftCardLinkBaseUrl,
       log: jsonLog,
     });
