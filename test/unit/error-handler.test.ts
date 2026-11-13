@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Fastify, { FastifyInstance } from "fastify";
+import { QueryFailedError } from "typeorm";
 import errorHandler from "../../src/plugins/error-handler";
+import { CardCryptoError } from "../../src/gift-cards/card-crypto";
 import {
   AppError,
   BadRequestError,
@@ -80,8 +82,10 @@ test("other Postgres errors are not treated as conflicts", async () => {
   await app.close();
 });
 
-test("Postgres deadlock and serialization failures map to 503 with Retry-After", async () => {
+test("Postgres deadlock, serialization and lock-timeout failures map to 503 with Retry-After", async () => {
   for (const error of [
+    Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" }),
+    Object.assign(new Error("query failed"), { driverError: { code: "55P03" } }),
     Object.assign(new Error("deadlock detected"), { code: "40P01" }),
     Object.assign(new Error("could not serialize access"), { code: "40001" }),
     Object.assign(new Error("query failed"), { driverError: { code: "40P01" } }),
@@ -93,5 +97,92 @@ test("Postgres deadlock and serialization failures map to 503 with Retry-After",
     assert.equal(res.headers["retry-after"], "1");
     assert.deepEqual(res.json(), { error: "Temporary conflict, please retry" });
     await app.close();
+  }
+});
+
+// ---------- what is logged (design 7.9) ----------
+
+async function logsFor(error: unknown): Promise<{ status: number; lines: Record<string, unknown>[]; raw: string }> {
+  const chunks: string[] = [];
+  const app = Fastify({ logger: { level: "trace", stream: { write: (line: string) => void chunks.push(line) } } });
+  await app.register(errorHandler);
+  app.get("/boom", () => {
+    throw error;
+  });
+  const res = await app.inject({ method: "GET", url: "/boom" });
+  await app.close();
+  const raw = chunks.join("");
+  return { status: res.statusCode, raw, lines: chunks.map((c) => JSON.parse(c) as Record<string, unknown>) };
+}
+
+function queryFailed(code: string): Error {
+  // A real QueryFailedError over a real pg DatabaseError, carrying row data in every free-text field
+  const driverError = Object.assign(new Error("Failing row contains (marker@example.com)"), {
+    code,
+    detail: "Failing row contains (marker@example.com)",
+    where: "SQL statement with 4111111111111111",
+    constraint: "gift_card_deliveries_status_check",
+    table: "gift_card_deliveries",
+  });
+  return new QueryFailedError(
+    "INSERT INTO gift_card_deliveries (recipient_email) VALUES ($1)",
+    ["marker@example.com", "4111111111111111"],
+    driverError
+  );
+}
+
+test("a database error on the 500 path is logged as name, code, constraint and table only", async () => {
+  const { status, lines, raw } = await logsFor(queryFailed("23514"));
+  assert.equal(status, 500);
+  const line = lines.find((l) => l.msg === "request failed");
+  assert.ok(line, raw);
+  assert.deepEqual(line.err, {
+    name: "QueryFailedError",
+    code: "23514",
+    constraint: "gift_card_deliveries_status_check",
+    table: "gift_card_deliveries",
+  });
+  assert.ok(!raw.includes("marker@example.com") && !raw.includes("4111111111111111"), raw);
+});
+
+test("a database error on the 503 path is logged the same way", async () => {
+  const { status, lines, raw } = await logsFor(queryFailed("55P03"));
+  assert.equal(status, 503);
+  const line = lines.find((l) => l.msg === "retryable database conflict");
+  assert.ok(line, raw);
+  assert.equal((line.err as { code: string }).code, "55P03");
+  assert.ok(!raw.includes("marker@example.com") && !raw.includes("4111111111111111"), raw);
+});
+
+test("a CardCryptoError returns a generic 500 and logs the card id with its fixed message", async () => {
+  const { status, lines, raw } = await logsFor(new CardCryptoError("Decryption failed", "card-123"));
+  assert.equal(status, 500);
+  const line = lines.find((l) => l.msg === "card decryption failed");
+  assert.ok(line, raw);
+  const err = line.err as { name: string; message: string; stack: string };
+  assert.equal(err.name, "CardCryptoError");
+  assert.equal(err.message, "Decryption failed");
+  assert.equal(line.cardId, "card-123");
+  assert.equal(err.stack, "", "no stack");
+});
+
+test("an error with a database cause logs the cause reduced, not whole", async () => {
+  const { lines, raw } = await logsFor(new Error("card number collision", { cause: queryFailed("23505") }));
+  const line = lines.find((l) => l.msg === "request failed");
+  assert.ok(line, raw);
+  const err = line.err as { message: string; cause: Record<string, unknown> };
+  assert.equal(err.message, "card number collision");
+  assert.equal(err.cause.code, "23505");
+  assert.ok(!raw.includes("marker@example.com") && !raw.includes("4111111111111111"), raw);
+});
+
+test("a Node errno error with a five character code keeps its message and stack in the log", async () => {
+  for (const code of ["EPIPE", "EPERM", "EBUSY", "EBADF", "EXDEV", "EROFS"]) {
+    const { lines, raw } = await logsFor(Object.assign(new Error(`write ${code} on the socket`), { code }));
+    const line = lines.find((l) => l.msg === "request failed");
+    assert.ok(line, raw);
+    const err = line.err as { message: string; stack: string };
+    assert.equal(err.message, `write ${code} on the socket`);
+    assert.match(err.stack, /Error/);
   }
 });

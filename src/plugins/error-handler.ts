@@ -1,10 +1,13 @@
 import fp from "fastify-plugin";
 import { FastifyInstance, FastifyRequest, FastifyReply, FastifyError } from "fastify";
+import { QueryFailedError } from "typeorm";
 import { AppError } from "../errors";
+import { CardCryptoError } from "../gift-cards/card-crypto";
 
 const PG_UNIQUE_VIOLATION = "23505";
 const PG_SERIALIZATION_FAILURE = "40001";
 const PG_DEADLOCK_DETECTED = "40P01";
+const PG_LOCK_NOT_AVAILABLE = "55P03"; // lock_timeout expired
 
 // TypeORM's QueryFailedError copies the driver error's fields onto itself and also keeps
 // the original under `driverError`.
@@ -14,13 +17,47 @@ function isUniqueViolation(error: unknown): boolean {
   return e.code === PG_UNIQUE_VIOLATION || e.driverError?.code === PG_UNIQUE_VIOLATION;
 }
 
-// A transaction the database aborted because of a concurrent one; safe for the client to retry
+// A transaction the database aborted (or gave up waiting for a lock in) because of a concurrent
+// one; safe for the client to retry
 function isRetryableConflict(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const e = error as { code?: unknown; driverError?: { code?: unknown } };
   return [e.code, e.driverError?.code].some(
-    (code) => code === PG_DEADLOCK_DETECTED || code === PG_SERIALIZATION_FAILURE
+    (code) => code === PG_DEADLOCK_DETECTED || code === PG_SERIALIZATION_FAILURE || code === PG_LOCK_NOT_AVAILABLE
   );
+}
+
+// A database error is recognised by its origin, never by the shape of its `code`: Node errno codes
+// (EPIPE, EPERM, EBUSY...) are five upper-case characters too, and must keep their message and stack.
+// TypeORM wraps every driver (pg) error raised by a query in a QueryFailedError.
+function isDatabaseError(error: unknown): boolean {
+  return error instanceof QueryFailedError;
+}
+
+type DriverFields = { code?: unknown; constraint?: unknown; table?: unknown; driverError?: DriverFields };
+
+function stringField(error: DriverFields, field: "code" | "constraint" | "table"): string | undefined {
+  const own = error[field];
+  if (typeof own === "string") return own;
+  const driver = error.driverError?.[field];
+  return typeof driver === "string" ? driver : undefined;
+}
+
+// What a log line may say about an error (design 7.9). A database error is reduced to its class and
+// the code, constraint and table: its message, detail, query and parameters can carry row data and
+// request values (a card number, a recipient email). Anything else keeps its name, message and
+// stack, plus its cause reduced the same way; its other properties are dropped.
+function loggableError(error: unknown, depth = 0): Record<string, unknown> {
+  if (typeof error !== "object" || error === null) return { name: typeof error };
+  const e = error as Error & DriverFields & { cause?: unknown };
+  const name = typeof e.name === "string" ? e.name : "Error";
+  const code = stringField(e, "code");
+  if (isDatabaseError(error)) {
+    return { name, code, constraint: stringField(e, "constraint"), table: stringField(e, "table") };
+  }
+  const reduced: Record<string, unknown> = { name, message: e.message, stack: e.stack };
+  if (e.cause !== undefined && depth < 1) reduced.cause = loggableError(e.cause, depth + 1);
+  return reduced;
 }
 
 export default fp(async function (fastify: FastifyInstance) {
@@ -35,9 +72,9 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.status(409).send({ error: "Already exists" });
       }
 
-      // Backstop for concurrent-transaction aborts (deadlock, serialization failure)
+      // Concurrent-transaction aborts (deadlock, serialization failure) and lock timeouts
       if (isRetryableConflict(error)) {
-        request.log.warn(error);
+        request.log.warn({ err: loggableError(error) }, "retryable database conflict");
         return reply
           .status(503)
           .header("Retry-After", "1")
@@ -50,7 +87,16 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.status(statusCode).send({ error: error.message });
       }
 
-      request.log.error(error);
+      // A CardCryptoError message is fixed text; the card id is the only thing logged about the card
+      const thrown: unknown = error;
+      if (thrown instanceof CardCryptoError) {
+        request.log.error(
+          { err: { name: thrown.name, message: thrown.message }, cardId: thrown.cardId },
+          "card decryption failed"
+        );
+      } else {
+        request.log.error({ err: loggableError(error) }, "request failed");
+      }
       return reply.status(500).send({ error: "Internal Server Error" });
     }
   );

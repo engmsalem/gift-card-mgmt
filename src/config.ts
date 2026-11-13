@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import type { CardKey } from "./gift-cards/card-crypto";
+
 export interface DbConfig {
   dbHost: string;
   dbPort: number;
@@ -26,8 +29,22 @@ export interface ServerConfig {
   corsAllowedHeaders: string[];
 }
 
+export interface GiftCardConfig {
+  // Hex-decoded keys (32 bytes) with their key ids
+  cardEncryptionKey: CardKey;
+  cardLookupKey: CardKey;
+  // Where delivery links point; the token is appended as a "#token=" fragment
+  giftCardLinkBaseUrl: string;
+  // Development only: print delivery links to the console instead of just logging
+  giftCardDevPrintLinks: boolean;
+}
+
 // Everything the API process needs. Migrations and scripts need only DbConfig.
-export type Config = DbConfig & ServerConfig;
+export type Config = DbConfig & ServerConfig & GiftCardConfig;
+
+// What the delivery dispatch script needs: it never decrypts, so it has no card keys.
+export type DispatchConfig = DbConfig &
+  Pick<GiftCardConfig, "giftCardDevPrintLinks"> & { giftCardLinkBaseUrl: string; nodeEnv: string };
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -39,6 +56,24 @@ export class ConfigError extends Error {
 type Env = Record<string, string | undefined>;
 
 export const MIN_JWT_SECRET_LENGTH = 32;
+
+const CARD_KEY_BYTES = 32;
+const MIN_DISTINCT_KEY_BYTES = 16;
+const MAX_CARD_KEY_ID = 32767;
+const DEFAULT_GIFT_CARD_LINK_BASE_URL = "http://localhost:3000/gift";
+
+const derivedKey = (label: string): string => createHash("sha256").update(label).digest("hex");
+
+// Keys that are committed to the repository (tests, CI). They protect nothing, so production
+// refuses them.
+export const PUBLISHED_NON_SECRET_KEYS = {
+  testEncryption: derivedKey("gift-card-test-encryption-key"),
+  testLookup: derivedKey("gift-card-test-lookup-key"),
+  ciEncryption: derivedKey("gift-card-ci-encryption-key"),
+  ciLookup: derivedKey("gift-card-ci-lookup-key"),
+} as const;
+
+const PUBLISHED_KEY_SET: ReadonlySet<string> = new Set(Object.values(PUBLISHED_NON_SECRET_KEYS));
 
 /** Typed readers over one env that record every problem into a shared list. */
 function createReader(env: Env, problems: string[]) {
@@ -128,7 +163,7 @@ function readServerConfig(env: Env, read: Reader): ServerConfig {
     read.problem('CORS_ORIGIN "*" must be used alone, not mixed with other origins');
   }
 
-  const corsMethods = read.list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]);
+  const corsMethods = read.list("CORS_METHODS", ["GET", "POST", "PUT", "PATCH", "DELETE"]);
   if (corsMethods.length === 0) read.problem("CORS_METHODS must contain at least one method");
   const corsAllowedHeaders = read.list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]);
   if (corsAllowedHeaders.length === 0) {
@@ -155,6 +190,101 @@ function readServerConfig(env: Env, read: Reader): ServerConfig {
     corsMethods,
     corsAllowedHeaders,
   };
+}
+
+/**
+ * Reads one card key (hex, 32 bytes, at least 16 distinct byte values) and its id. Messages name
+ * the variables and never echo a value. Returns the hex too, for the cross-key checks.
+ */
+function readCardKey(
+  env: Env,
+  read: Reader,
+  keyVar: string,
+  idVar: string,
+  production: boolean
+): { key: CardKey; hex: string } {
+  const raw = env[keyVar] ?? "";
+  let key = Buffer.alloc(0);
+  let hex = "";
+  if (raw === "") {
+    read.problem(`${keyVar} is required`);
+  } else if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
+    read.problem(`${keyVar} must be ${CARD_KEY_BYTES * 2} hexadecimal characters (${CARD_KEY_BYTES} bytes)`);
+  } else {
+    const candidate = Buffer.from(raw, "hex");
+    if (new Set(candidate).size < MIN_DISTINCT_KEY_BYTES) {
+      read.problem(`${keyVar} is too low-entropy (needs at least ${MIN_DISTINCT_KEY_BYTES} distinct byte values)`);
+    } else if (production && PUBLISHED_KEY_SET.has(raw.toLowerCase())) {
+      read.problem(`${keyVar} is a published test/CI key and cannot be used when NODE_ENV is "production"`);
+    } else {
+      key = candidate;
+      hex = raw.toLowerCase();
+    }
+  }
+
+  let id = 1;
+  const rawId = env[idVar];
+  if (rawId !== undefined && rawId !== "") {
+    const parsed = Number(rawId);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_CARD_KEY_ID) {
+      read.problem(`${idVar} must be an integer between 1 and ${MAX_CARD_KEY_ID}`);
+    } else {
+      id = parsed;
+    }
+  }
+  return { key: { id, key }, hex };
+}
+
+/** Delivery link settings, shared by the API (readGiftCardConfig) and the dispatch script. */
+function readLinkConfig(
+  env: Env,
+  read: Reader,
+  nodeEnv: string
+): Pick<GiftCardConfig, "giftCardLinkBaseUrl" | "giftCardDevPrintLinks"> {
+  const production = nodeEnv === "production";
+  const raw = production ? read.str("GIFT_CARD_LINK_BASE_URL") : read.str("GIFT_CARD_LINK_BASE_URL", DEFAULT_GIFT_CARD_LINK_BASE_URL);
+  if (raw !== "") {
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== "https:" && url.protocol !== "http:") {
+        read.problem("GIFT_CARD_LINK_BASE_URL must be an http(s) URL");
+      } else if (production && url.protocol !== "https:") {
+        read.problem('GIFT_CARD_LINK_BASE_URL must use https when NODE_ENV is "production"');
+      }
+      if (raw.includes("#")) read.problem("GIFT_CARD_LINK_BASE_URL must not contain a fragment");
+    } catch {
+      read.problem("GIFT_CARD_LINK_BASE_URL must be a valid URL");
+    }
+  }
+
+  const devPrintLinks = read.bool("GIFT_CARD_DEV_PRINT_LINKS", false);
+  if (devPrintLinks && nodeEnv !== "development") {
+    read.problem('GIFT_CARD_DEV_PRINT_LINKS=true is allowed only when NODE_ENV is "development"');
+  }
+  return { giftCardLinkBaseUrl: raw, giftCardDevPrintLinks: devPrintLinks };
+}
+
+/** Gift card keys and delivery link settings. Not part of readServerConfig (see loadConfig). */
+function readGiftCardConfig(env: Env, read: Reader): GiftCardConfig {
+  const nodeEnv = read.str("NODE_ENV", "development");
+  const production = nodeEnv === "production";
+  const encryption = readCardKey(env, read, "CARD_ENCRYPTION_KEY", "CARD_ENCRYPTION_KEY_ID", production);
+  const lookup = readCardKey(env, read, "CARD_LOOKUP_KEY", "CARD_LOOKUP_KEY_ID", production);
+  if (encryption.hex !== "" && encryption.hex === lookup.hex) {
+    read.problem("CARD_LOOKUP_KEY must differ from CARD_ENCRYPTION_KEY");
+  }
+  return {
+    cardEncryptionKey: encryption.key,
+    cardLookupKey: lookup.key,
+    ...readLinkConfig(env, read, nodeEnv),
+  };
+}
+
+// DB_LOGGING prints every statement with its parameters, which carry personal data
+function checkDbLogging(read: Reader, dbLogging: boolean, nodeEnv: string): void {
+  if (dbLogging && nodeEnv === "production") {
+    read.problem('DB_LOGGING=true is not allowed when NODE_ENV is "production" (it logs SQL parameters)');
+  }
 }
 
 function throwIfProblems(problems: string[]): void {
@@ -191,7 +321,26 @@ export function loadServerConfig(env: Env): Readonly<ServerConfig> {
 export function loadConfig(env: Env): Readonly<Config> {
   const problems: string[] = [];
   const read = createReader(env, problems);
-  const config: Config = { ...readDbConfig(env, read), ...readServerConfig(env, read) };
+  const config: Config = {
+    ...readDbConfig(env, read),
+    ...readServerConfig(env, read),
+    ...readGiftCardConfig(env, read),
+  };
+  checkDbLogging(read, config.dbLogging, config.nodeEnv);
+  throwIfProblems(problems);
+  return Object.freeze(config);
+}
+
+/**
+ * Settings for the delivery dispatch script: database and delivery link settings, with no card
+ * keys (it never decrypts) and no API secrets.
+ */
+export function loadDispatchConfig(env: Env): Readonly<DispatchConfig> {
+  const problems: string[] = [];
+  const read = createReader(env, problems);
+  const nodeEnv = read.str("NODE_ENV", "development");
+  const config: DispatchConfig = { ...readDbConfig(env, read), ...readLinkConfig(env, read, nodeEnv), nodeEnv };
+  checkDbLogging(read, config.dbLogging, nodeEnv);
   throwIfProblems(problems);
   return Object.freeze(config);
 }

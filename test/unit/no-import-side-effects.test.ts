@@ -12,8 +12,8 @@ const root = path.resolve(__dirname, "../..");
 // empty directory (so no .env can be found by accident) and the environment's keys must be
 // identical before and after: DOTENV_CONFIG_PATH points at a file with a sentinel key, so a
 // dotenv/config import anywhere in the graph would add it.
-test("app, data-source and jwt plugin can be imported with an empty environment", () => {
-  const modules = ["src/app", "src/data-source", "src/plugins/jwt"].map((m) => path.join(root, m));
+function assertImportsAreSideEffectFree(moduleNames: string[]): void {
+  const modules = moduleNames.map((m) => path.join(root, m));
   const script = [
     `const before = Object.keys(process.env).sort();`,
     ...modules.map((m) => `require(${JSON.stringify(m)});`),
@@ -50,4 +50,38 @@ test("app, data-source and jwt plugin can be imported with an empty environment"
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
+}
+
+test("app, data-source and jwt plugin can be imported with an empty environment", () => {
+  assertImportsAreSideEffectFree(["src/app", "src/data-source", "src/plugins/jwt"]);
+});
+
+// The gift card modules (design section 9). Not listed, because they are entry points that load
+// .env and read process.env when run: src/index, src/migration-data-source and src/scripts/*.
+test("gift card modules can be imported with an empty environment", () => {
+  assertImportsAreSideEffectFree([
+    "src/gift-cards/card-crypto",
+    "src/gift-cards/card-number",
+    "src/gift-cards/card-state",
+    "src/gift-cards/delivery-token",
+    "src/gift-cards/mask",
+    "src/gift-cards/money",
+    "src/gift-cards/program-rules",
+    "src/gift-cards/request-hash",
+    "src/delivery/console-link-sender",
+    "src/delivery/log-only-sender",
+    "src/plugins/error-handler",
+    "src/routes/giftCardLinkRoutes",
+    "src/routes/giftCardProgramRoutes",
+    "src/routes/giftCardRoutes",
+    "src/routes/schemas",
+    "src/services/audit",
+    "src/services/cardKeyCheck",
+    "src/services/deliveryDispatcher",
+    "src/services/deliveryService",
+    "src/services/giftCardProgramService",
+    "src/services/giftCardService",
+    "src/services/redemptionService",
+    "src/services/sql",
+  ]);
 });

@@ -45,6 +45,9 @@ jobs:
       DB_USERNAME: gcm_app
       DB_PASSWORD: ci-throwaway-app-password
       JWT_SECRET: ci-throwaway-jwt-secret-0123456789abcdef
+      # sha256("gift-card-ci-encryption-key") and sha256("gift-card-ci-lookup-key"), in hex
+      CARD_ENCRYPTION_KEY: "6e15f49af0e225f2c7e741cb8948ccd42ad4d2ee3c3a886856f5e0b24de26951"
+      CARD_LOOKUP_KEY: "209cdbd42d6e0c0fc8d24a10f131ea6d3bea4c15f7d00339bcbfea6abc919248"
       PORT: "3000"
     steps:
       - uses: actions/checkout@v7

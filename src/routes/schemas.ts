@@ -24,6 +24,15 @@ export const tenantResponse = {
   },
 } as const;
 
+// Shape only (B-3): a printable string with no control characters
+export const NO_CONTROL_CHARS = "^[^\u0000-\u001f\u007f]+$";
+
+export const idParams = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", format: "uuid" } },
+} as const;
+
 export const errorResponse = {
   type: "object",
   properties: { error: { type: "string" } },
@@ -36,4 +45,120 @@ export const tokenPairResponse = {
     refreshToken: { type: "string" },
     expiresIn: { type: "integer" },
   },
+} as const;
+
+export const giftCardProgramResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    name: { type: "string" },
+    cardType: { type: "string", enum: ["paid", "promotional"] },
+    currency: { type: "string" },
+    currencyExponent: { type: "integer" },
+    country: { type: "string" },
+    region: { type: ["string", "null"] },
+    cardNumberPrefix: { type: "string" },
+    cardNumberLength: { type: "integer" },
+    pinRequired: { type: "boolean" },
+    maxValue: { type: "integer" },
+    expiryMonths: { type: ["integer", "null"] },
+    staffDailyIssueLimit: { type: ["integer", "null"] },
+    status: { type: "string", enum: ["active", "retired"] },
+    hasIssuedCards: { type: "boolean" },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+export const giftCardResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    programId: { type: "string", format: "uuid" },
+    referenceNumber: { type: "string" },
+    last4: { type: "string" },
+    currency: { type: "string" },
+    currencyExponent: { type: "integer" },
+    initialAmount: { type: "integer" },
+    balance: { type: "integer" },
+    status: { type: "string", enum: ["active", "suspended", "depleted", "voided", "expired"] },
+    hasPin: { type: "boolean" },
+    expiresAt: { type: ["string", "null"], format: "date-time" },
+    pinLocked: { type: "boolean" },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+export const giftCardDeliveryResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    recipientName: { type: "string" },
+    recipientEmail: { type: "string" },
+    senderName: { type: "string" },
+    message: { type: ["string", "null"] },
+    sendAt: { type: "string", format: "date-time" },
+    status: { type: "string", enum: ["scheduled", "sending", "sent", "failed", "cancelled"] },
+    attempts: { type: "integer" },
+    sentAt: { type: ["string", "null"], format: "date-time" },
+    openedAt: { type: ["string", "null"], format: "date-time" },
+    revealCount: { type: "integer" },
+    lastRevealedAt: { type: ["string", "null"], format: "date-time" },
+  },
+} as const;
+
+export const giftCardWithDeliveryResponse = {
+  type: "object",
+  properties: { card: giftCardResponse, delivery: giftCardDeliveryResponse },
+} as const;
+
+export const giftCardTransactionResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    giftCardId: { type: "string", format: "uuid" },
+    type: { type: "string", enum: ["issue", "redeem", "refund", "void"] },
+    amount: { type: "integer" },
+    currency: { type: "string" },
+    balanceAfter: { type: "integer" },
+    relatedTransactionId: { type: ["string", "null"], format: "uuid" },
+    externalReference: { type: ["string", "null"] },
+    actorUserId: { type: "string", format: "uuid" },
+    createdAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+export const giftCardDeliveryOnlyResponse = {
+  type: "object",
+  properties: { delivery: giftCardDeliveryResponse },
+} as const;
+
+export const giftCardRevealResponse = {
+  type: "object",
+  properties: {
+    cardNumber: { type: "string" },
+    pin: { type: ["string", "null"] },
+    balance: { type: "integer" },
+    currency: { type: "string" },
+    currencyExponent: { type: "integer" },
+    status: { type: "string", enum: ["active", "suspended", "depleted", "voided", "expired"] },
+    expiresAt: { type: ["string", "null"], format: "date-time" },
+    programName: { type: "string" },
+    merchantName: { type: "string" },
+    recipientName: { type: "string" },
+    senderName: { type: "string" },
+    message: { type: ["string", "null"] },
+  },
+} as const;
+
+export const giftCardLookupResponse = {
+  type: "object",
+  properties: { card: giftCardResponse },
+} as const;
+
+// A redeem or refund: the ledger row it wrote (or replayed) and the card as it stands now
+export const giftCardTransactionResultResponse = {
+  type: "object",
+  properties: { transaction: giftCardTransactionResponse, card: giftCardResponse },
 } as const;

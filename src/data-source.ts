@@ -1,6 +1,12 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import type { DbConfig } from "./config";
+import { AuditLog } from "./entities/audit-log";
+import { GiftCard } from "./entities/gift-card";
+import { GiftCardDelivery } from "./entities/gift-card-delivery";
+import { GiftCardKeyCheck } from "./entities/gift-card-key-check";
+import { GiftCardProgram } from "./entities/gift-card-program";
+import { GiftCardTransaction } from "./entities/gift-card-transaction";
 import { RefreshToken } from "./entities/refresh-token";
 import { Tenant } from "./entities/tenant";
 import { User } from "./entities/user";
@@ -23,7 +29,17 @@ export function createDataSource(config: DbConfig, role: "app" | "admin"): DataS
     ...credentials,
     synchronize: false,
     logging: config.dbLogging,
-    entities: [Tenant, User, RefreshToken],
+    entities: [
+      Tenant,
+      User,
+      RefreshToken,
+      AuditLog,
+      GiftCardProgram,
+      GiftCard,
+      GiftCardTransaction,
+      GiftCardDelivery,
+      GiftCardKeyCheck,
+    ],
     // Resolves to .ts under ts-node (src/) and .js when compiled (dist/)
     migrations: [__dirname + "/migrations/*.{ts,js}"],
   });
