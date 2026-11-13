@@ -21,6 +21,20 @@ import { DeliveryDispatcher, GiftCardDeliverySender } from "./services/deliveryD
 // A request that cannot get a card row lock within this long answers 503 instead of queueing
 const DEFAULT_LOCK_TIMEOUT_MS = 5000;
 
+// Backstop for design 7.9: the error handler already reduces database errors to code, constraint and
+// table; these paths remove the fields that carry row data and request values if one is logged whole.
+const REDACT_PATHS = ["err.detail", "err.where", "err.parameters", "err.query", "err.driverError"];
+
+// Merges the redaction into the logger options, including caller-supplied ones (tests pass a stream)
+function withRedaction(logger: boolean | object): boolean | object {
+  if (logger === false) return false;
+  const base: { redact?: unknown } = logger === true ? {} : logger;
+  const existing = Array.isArray(base.redact)
+    ? (base.redact as string[])
+    : ((base.redact as { paths?: string[] } | undefined)?.paths ?? []);
+  return { ...base, redact: { paths: [...existing, ...REDACT_PATHS], censor: "[REDACTED]" } };
+}
+
 export interface BuildAppOptions {
   config: Config;
   // Must already be initialized by the caller
@@ -47,9 +61,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false } },
     // Off unless TRUST_PROXY is set: otherwise clients could spoof X-Forwarded-For
     trustProxy: opts.config.trustProxy,
-    logger: opts.logger ?? {
-      level: opts.config.nodeEnv === "production" ? "info" : "debug",
-    },
+    logger: withRedaction(
+      opts.logger ?? {
+        level: opts.config.nodeEnv === "production" ? "info" : "debug",
+      }
+    ),
   });
 
   // Once Fastify exists, a failed registration must not leave it (and its hooks) open

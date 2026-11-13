@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import { FastifyInstance, FastifyRequest, FastifyReply, FastifyError } from "fastify";
 import { AppError } from "../errors";
+import { CardCryptoError } from "../gift-cards/card-crypto";
 
 const PG_UNIQUE_VIOLATION = "23505";
 const PG_SERIALIZATION_FAILURE = "40001";
@@ -25,6 +26,35 @@ function isRetryableConflict(error: unknown): boolean {
   );
 }
 
+// A five character SQLSTATE; Node and Fastify error codes (ECONNREFUSED, FST_ERR_...) do not match
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+type DriverFields = { code?: unknown; constraint?: unknown; table?: unknown; driverError?: DriverFields };
+
+function stringField(error: DriverFields, field: "code" | "constraint" | "table"): string | undefined {
+  const own = error[field];
+  if (typeof own === "string") return own;
+  const driver = error.driverError?.[field];
+  return typeof driver === "string" ? driver : undefined;
+}
+
+// What a log line may say about an error (design 7.9). A database error is reduced to its class and
+// the code, constraint and table: its message, detail, query and parameters can carry row data and
+// request values (a card number, a recipient email). Anything else keeps its name, message and
+// stack, plus its cause reduced the same way; its other properties are dropped.
+function loggableError(error: unknown, depth = 0): Record<string, unknown> {
+  if (typeof error !== "object" || error === null) return { name: typeof error };
+  const e = error as Error & DriverFields & { cause?: unknown };
+  const name = typeof e.name === "string" ? e.name : "Error";
+  const code = stringField(e, "code");
+  if ((code !== undefined && SQLSTATE.test(code)) || e.driverError !== undefined) {
+    return { name, code, constraint: stringField(e, "constraint"), table: stringField(e, "table") };
+  }
+  const reduced: Record<string, unknown> = { name, message: e.message, stack: e.stack };
+  if (e.cause !== undefined && depth < 1) reduced.cause = loggableError(e.cause, depth + 1);
+  return reduced;
+}
+
 export default fp(async function (fastify: FastifyInstance) {
   fastify.setErrorHandler(
     (error: FastifyError, request: FastifyRequest, reply: FastifyReply) => {
@@ -39,7 +69,7 @@ export default fp(async function (fastify: FastifyInstance) {
 
       // Concurrent-transaction aborts (deadlock, serialization failure) and lock timeouts
       if (isRetryableConflict(error)) {
-        request.log.warn(error);
+        request.log.warn({ err: loggableError(error) }, "retryable database conflict");
         return reply
           .status(503)
           .header("Retry-After", "1")
@@ -52,7 +82,16 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.status(statusCode).send({ error: error.message });
       }
 
-      request.log.error(error);
+      // A CardCryptoError message is fixed text; the card id is the only thing logged about the card
+      const thrown: unknown = error;
+      if (thrown instanceof CardCryptoError) {
+        request.log.error(
+          { err: { name: thrown.name, message: thrown.message }, cardId: thrown.cardId },
+          "card decryption failed"
+        );
+      } else {
+        request.log.error({ err: loggableError(error) }, "request failed");
+      }
       return reply.status(500).send({ error: "Internal Server Error" });
     }
   );

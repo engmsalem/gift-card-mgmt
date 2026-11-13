@@ -15,7 +15,11 @@ export type SecretPurpose = "number" | "pin";
 
 /** Messages are fixed strings: they never carry keys, plaintext, ciphertext or row data. */
 export class CardCryptoError extends Error {
-  constructor(message: string) {
+  /** The card whose secret failed to decrypt, when known: the only identifier that is safe to log. */
+  constructor(
+    message: string,
+    readonly cardId?: string
+  ) {
     super(message);
     this.name = "CardCryptoError";
   }
@@ -86,9 +90,9 @@ export class CardCrypto {
     blob: Buffer
   ): string {
     const key = this.encryptionKeys.get(keyId);
-    if (key === undefined) throw new CardCryptoError("Unknown card key id");
+    if (key === undefined) throw new CardCryptoError("Unknown card key id", ids.cardId);
     if (blob.length < 1 + IV_LENGTH + TAG_LENGTH || blob[0] !== BLOB_VERSION) {
-      throw new CardCryptoError("Invalid ciphertext");
+      throw new CardCryptoError("Invalid ciphertext", ids.cardId);
     }
     const iv = blob.subarray(1, 1 + IV_LENGTH);
     const tag = blob.subarray(1 + IV_LENGTH, 1 + IV_LENGTH + TAG_LENGTH);
@@ -100,7 +104,7 @@ export class CardCrypto {
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
     } catch {
       // Deliberately not chained: the underlying error must not carry anything about the data
-      throw new CardCryptoError("Decryption failed");
+      throw new CardCryptoError("Decryption failed", ids.cardId);
     }
   }
 
