@@ -16,7 +16,18 @@ export type AuditEntry =
       action: "gift_card.suspended" | "gift_card.resumed" | "gift_card.unlocked" | "gift_card.pin_locked";
       details: { giftCardId: string };
     }
-  | { action: "gift_card.voided"; details: { giftCardId: string; voidedAmount: number } };
+  | { action: "gift_card.voided"; details: { giftCardId: string; voidedAmount: number } }
+  | {
+      action: "gift_card_delivery.resent";
+      // Emails are masked (see maskEmail); the full address never enters the audit log
+      details: {
+        giftCardId: string;
+        deliveryId: string;
+        recipientChanged: boolean;
+        previousRecipient?: string;
+        newRecipient?: string;
+      };
+    };
 
 /**
  * Appends an audit row using the caller's entity manager, so it commits or rolls back with the

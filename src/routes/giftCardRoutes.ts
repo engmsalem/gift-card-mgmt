@@ -3,9 +3,11 @@ import { Role } from "../enums/roles";
 import type { CardCrypto } from "../gift-cards/card-crypto";
 import { requireRole } from "../plugins/jwt";
 import type { DeliveryDispatcher } from "../services/deliveryDispatcher";
+import { DeliveryService, ResendInput } from "../services/deliveryService";
 import { CardWithDelivery, GiftCardService, IssueInput } from "../services/giftCardService";
 import {
   errorResponse,
+  giftCardDeliveryOnlyResponse,
   giftCardTransactionResponse,
   giftCardWithDeliveryResponse,
 } from "./schemas";
@@ -43,14 +45,19 @@ function perUser(max: number) {
 
 export default async function giftCardRoutes(fastify: FastifyInstance, opts: GiftCardRoutesOptions) {
   const service = new GiftCardService(fastify, opts.cardCrypto, opts.dispatcher);
+  const deliveries = new DeliveryService(fastify, opts.cardCrypto, opts.dispatcher);
   const adminOnly = [fastify.authenticate, requireRole(Role.ADMIN)];
-  const adminOrStaff = [fastify.authenticate, requireRole(Role.ADMIN, Role.STAFF)];
+  const adminOrStaffHooks = () => [fastify.authenticate, requireRole(Role.ADMIN, Role.STAFF)];
+  const adminOrStaff = adminOrStaffHooks();
+  // @fastify/rate-limit pushes a route's limiter hook onto that route's own onRequest array. A route
+  // with its own limit must therefore get a fresh array (adminOrStaffHooks()): on the shared one its
+  // limit would leak onto every route that uses it, and other routes' hooks would run first.
   const ctxOf = (request: FastifyRequest) => ({ tenantId: request.user.tenantId, userId: request.user.id });
 
   fastify.post<{ Body: IssueInput }>(
     "/gift-cards",
     {
-      onRequest: adminOrStaff,
+      onRequest: adminOrStaffHooks(),
       config: perUser(60),
       schema: {
         body: {
@@ -136,4 +143,36 @@ export default async function giftCardRoutes(fastify: FastifyInstance, opts: Gif
   stateChange("resume", (ctx, id) => service.resume(ctx, id));
   stateChange("void", (ctx, id) => service.void(ctx, id));
   stateChange("unlock", (ctx, id) => service.unlock(ctx, id));
+
+  // Staff may resend to the recipient on file; changing the recipient is checked in the service
+  fastify.post<{ Params: { id: string }; Body: ResendInput | undefined }>(
+    "/gift-cards/:id/resend",
+    {
+      onRequest: adminOrStaffHooks(),
+      config: perUser(10),
+      // A resend to the recipient on file needs no body: validate it as an empty object
+      preValidation: async (request) => {
+        request.body ??= {};
+      },
+      schema: {
+        params: idParams,
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            recipient: {
+              type: "object",
+              additionalProperties: false,
+              minProperties: 1,
+              properties: { name, email: { type: "string", minLength: 3, maxLength: 254 } },
+            },
+          },
+        },
+        response: { 200: giftCardDeliveryOnlyResponse, "4xx": errorResponse },
+      },
+    },
+    async (request) => ({
+      delivery: await deliveries.resend({ ...ctxOf(request), role: request.user.role }, request.params.id, request.body ?? {}),
+    })
+  );
 }

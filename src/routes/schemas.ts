@@ -119,3 +119,26 @@ export const giftCardTransactionResponse = {
     createdAt: { type: "string", format: "date-time" },
   },
 } as const;
+
+export const giftCardDeliveryOnlyResponse = {
+  type: "object",
+  properties: { delivery: giftCardDeliveryResponse },
+} as const;
+
+export const giftCardRevealResponse = {
+  type: "object",
+  properties: {
+    cardNumber: { type: "string" },
+    pin: { type: ["string", "null"] },
+    balance: { type: "integer" },
+    currency: { type: "string" },
+    currencyExponent: { type: "integer" },
+    status: { type: "string", enum: ["active", "suspended", "depleted", "voided", "expired"] },
+    expiresAt: { type: ["string", "null"], format: "date-time" },
+    programName: { type: "string" },
+    merchantName: { type: "string" },
+    recipientName: { type: "string" },
+    senderName: { type: "string" },
+    message: { type: ["string", "null"] },
+  },
+} as const;

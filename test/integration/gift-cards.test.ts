@@ -239,7 +239,7 @@ test("issue returns last4 only and the delivery; the number and PIN exist only a
   assert.equal(card.expiresAt, null);
   assert.equal(card.pinLocked, false);
   assert.deepEqual(
-    { ...delivery, id: undefined, sendAt: undefined },
+    { ...delivery, id: undefined, sendAt: undefined, sentAt: undefined },
     {
       id: undefined,
       recipientName: "Rita Recipient",
@@ -247,14 +247,17 @@ test("issue returns last4 only and the delivery; the number and PIN exist only a
       senderName: "Sam Sender",
       message: "Happy holidays",
       sendAt: undefined,
-      status: "scheduled",
-      attempts: 0,
-      sentAt: null,
+      // Issue dispatches right after the commit, and the default log-only sender succeeds
+      status: "sent",
+      attempts: 1,
+      sentAt: undefined,
       openedAt: null,
       revealCount: 0,
       lastRevealedAt: null,
     }
   );
+
+  assert.ok(delivery.sentAt, "sentAt is set once sent")
 
   // Decrypt the stored secrets with the test keys: a well-formed number that ends in last4, and a PIN
   const config = loadTestConfig();

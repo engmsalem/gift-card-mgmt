@@ -3,23 +3,31 @@ import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { DataSource } from "typeorm";
 import type { Config } from "./config";
+import { ConsoleLinkDeliverySender } from "./delivery/console-link-sender";
+import { LogOnlyDeliverySender } from "./delivery/log-only-sender";
 import { CardCrypto } from "./gift-cards/card-crypto";
 import errorHandler from "./plugins/error-handler";
 import jwtPlugin from "./plugins/jwt";
 import rateLimit from "./plugins/rate-limit";
 import authRoutes from "./routes/authRoutes";
+import giftCardLinkRoutes from "./routes/giftCardLinkRoutes";
 import giftCardProgramRoutes from "./routes/giftCardProgramRoutes";
 import giftCardRoutes from "./routes/giftCardRoutes";
 import tenantRoutes from "./routes/tenantRoutes";
 import userRoutes from "./routes/userRoutes";
 import { verifyCardKeys } from "./services/cardKeyCheck";
-import { DeliveryDispatcher } from "./services/deliveryDispatcher";
+import { DeliveryDispatcher, GiftCardDeliverySender } from "./services/deliveryDispatcher";
 
 export interface BuildAppOptions {
   config: Config;
   // Must already be initialized by the caller
   dataSource: DataSource;
   logger?: boolean | object;
+  giftCards?: {
+    // Replaces the configured sender (tests inject a recording one); never set in production
+    deliverySender?: GiftCardDeliverySender;
+    sendTimeoutMs?: number;
+  };
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
@@ -70,8 +78,21 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(tenantRoutes);
     await app.register(userRoutes);
     await app.register(giftCardProgramRoutes);
-    // The stub dispatcher does nothing until the delivery phase replaces it
-    await app.register(giftCardRoutes, { cardCrypto, dispatcher: new DeliveryDispatcher() });
+
+    // Composition root for delivery: the override, else the development console sender (config
+    // allows it only under NODE_ENV=development), else the log-only sender
+    const sender =
+      opts.giftCards?.deliverySender ??
+      (opts.config.giftCardDevPrintLinks ? new ConsoleLinkDeliverySender() : new LogOnlyDeliverySender(app.log));
+    const dispatcher = new DeliveryDispatcher({
+      db: opts.dataSource,
+      sender,
+      linkBaseUrl: opts.config.giftCardLinkBaseUrl,
+      log: app.log,
+      sendTimeoutMs: opts.giftCards?.sendTimeoutMs,
+    });
+    await app.register(giftCardRoutes, { cardCrypto, dispatcher });
+    await app.register(giftCardLinkRoutes, { cardCrypto, dispatcher });
 
     return app;
   } catch (err) {

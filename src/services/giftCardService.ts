@@ -211,6 +211,17 @@ function toDeliveryResponse(r: DeliveryRow): GiftCardDeliveryResponse {
   };
 }
 
+/** The delivery of a card. Issue creates it in the same transaction as the card, so it always exists. */
+export async function loadDelivery(em: EntityManager, tenantId: string, cardId: string): Promise<GiftCardDeliveryResponse> {
+  const [delivery] = await returningRows<DeliveryRow>(
+    em,
+    `SELECT ${DELIVERY_COLUMNS} FROM gift_card_deliveries WHERE gift_card_id = $1 AND tenant_id = $2`,
+    [cardId, tenantId]
+  );
+  if (!delivery) throw new Error("gift card has no delivery");
+  return toDeliveryResponse(delivery);
+}
+
 function toTransactionResponse(r: TransactionRow): TransactionResponse {
   return {
     id: r.id,
@@ -270,8 +281,11 @@ export class GiftCardService {
 
     const result = await this.issueWithRetries(ctx, input, prepared);
     // A replay changes nothing, so there is nothing to send
-    if (!result.replayed) await this.dispatcher.dispatch({ deliveryId: result.delivery.id });
-    return result;
+    if (result.replayed) return result;
+    await this.dispatcher.dispatch({ deliveryId: result.delivery.id });
+    // Dispatch may have sent it (or failed, or left it scheduled for later): report the real status
+    const delivery = await loadDelivery(this.app.db.manager, ctx.tenantId, result.card.id);
+    return { ...result, delivery };
   }
 
   private async issueWithRetries(
@@ -648,13 +662,6 @@ export class GiftCardService {
       [cardId, tenantId]
     );
     if (!card) throw new NotFoundError("Gift card not found");
-    const [delivery] = await returningRows<DeliveryRow>(
-      em,
-      `SELECT ${DELIVERY_COLUMNS} FROM gift_card_deliveries WHERE gift_card_id = $1 AND tenant_id = $2`,
-      [cardId, tenantId]
-    );
-    // Issue creates the delivery in the same transaction as the card, so this is an invariant
-    if (!delivery) throw new Error("gift card has no delivery");
-    return { card: toCardResponse(card), delivery: toDeliveryResponse(delivery) };
+    return { card: toCardResponse(card), delivery: await loadDelivery(em, tenantId, cardId) };
   }
 }

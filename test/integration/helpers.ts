@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach } from "node:test";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import type { DataSource } from "typeorm";
-import { buildApp } from "../../src/app";
+import { BuildAppOptions, buildApp } from "../../src/app";
 import { Config, PUBLISHED_NON_SECRET_KEYS, loadConfig } from "../../src/config";
 import { createDataSource } from "../../src/data-source";
 import { assertTestDatabase, resolveTestDatabase } from "../support/test-db";
@@ -85,9 +85,12 @@ export async function teardownDatabase(): Promise<void> {
  * Builds the Fastify app on the (initialized) app data source, running as the app role.
  * Pass a config (see loadTestConfig) to build it with different settings.
  */
-export async function buildTestApp(config: Config = testConfig): Promise<FastifyInstance> {
+export async function buildTestApp(
+  config: Config = testConfig,
+  giftCards?: BuildAppOptions["giftCards"]
+): Promise<FastifyInstance> {
   if (!appDataSource.isInitialized) await setupDatabase();
-  return buildApp({ config, dataSource: appDataSource, logger: false });
+  return buildApp({ config, dataSource: appDataSource, logger: false, giftCards });
 }
 
 /** Runs SQL as the admin role (fixtures and direct state changes). */
@@ -186,8 +189,9 @@ export function bearer(token: string): { authorization: string } {
  * Registers the standard lifecycle for an integration test file: migrate once, reset data
  * and build a fresh app (fresh rate-limit counters) for every test, tear down at the end.
  * Call at the top level of the test file; returns an accessor for the current app.
+ * `giftCards` is evaluated before each test, so it can hand out a fresh recording sender.
  */
-export function useTestApp(): () => FastifyInstance {
+export function useTestApp(giftCards?: () => BuildAppOptions["giftCards"]): () => FastifyInstance {
   let app: FastifyInstance | undefined;
 
   before(async () => {
@@ -195,7 +199,7 @@ export function useTestApp(): () => FastifyInstance {
   });
   beforeEach(async () => {
     await resetDb();
-    app = await buildTestApp();
+    app = await buildTestApp(undefined, giftCards?.());
   });
   afterEach(async () => {
     await app?.close();
