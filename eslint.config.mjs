@@ -27,6 +27,26 @@ export default tseslint.config(
     rules: { "@typescript-eslint/require-await": "off" },
   },
   {
+    // The gift-card core is pure (node:crypto and its own siblings only): no ORM, web framework,
+    // entities, services, routes or config. Keeps domain rules testable without a database.
+    files: ["src/gift-cards/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            { group: ["typeorm", "typeorm/*"], message: "src/gift-cards is pure: no ORM." },
+            { group: ["fastify", "fastify/*", "@fastify/*"], message: "src/gift-cards is pure: no web framework." },
+            {
+              group: ["**/entities", "**/entities/*", "**/services", "**/services/*", "**/routes", "**/routes/*", "**/config"],
+              message: "src/gift-cards is pure: it must not depend on entities, services, routes or config.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Plain JS/config files are outside the TS project
     files: ["**/*.mjs", "**/*.js"],
     extends: [tseslint.configs.disableTypeChecked],

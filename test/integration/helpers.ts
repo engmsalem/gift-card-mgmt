@@ -9,7 +9,7 @@ import { after, afterEach, before, beforeEach } from "node:test";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import type { DataSource } from "typeorm";
 import { buildApp } from "../../src/app";
-import { Config, loadConfig } from "../../src/config";
+import { Config, PUBLISHED_NON_SECRET_KEYS, loadConfig } from "../../src/config";
 import { createDataSource } from "../../src/data-source";
 import { assertTestDatabase, resolveTestDatabase } from "../support/test-db";
 
@@ -44,6 +44,11 @@ export function loadTestConfig(overrides: Record<string, string | undefined> = {
     NODE_ENV: "test",
     DB_LOGGING: "false",
     TRUST_PROXY: "false",
+    // Fixed, published non-secret keys (refused in production), so every run and fixture is reproducible
+    CARD_ENCRYPTION_KEY: PUBLISHED_NON_SECRET_KEYS.testEncryption,
+    CARD_LOOKUP_KEY: PUBLISHED_NON_SECRET_KEYS.testLookup,
+    GIFT_CARD_LINK_BASE_URL: "http://localhost:3000/gift",
+    GIFT_CARD_DEV_PRINT_LINKS: "false",
     ...overrides,
     DB_DATABASE: testDb,
   });

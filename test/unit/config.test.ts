@@ -1,12 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, loadDbConfig, loadServerConfig } from "../../src/config";
+import {
+  loadConfig,
+  loadDbConfig,
+  loadDispatchConfig,
+  loadServerConfig,
+  PUBLISHED_NON_SECRET_KEYS,
+} from "../../src/config";
 
 const validEnv = {
   DB_DATABASE: "gcm",
   DB_USERNAME: "app",
   DB_PASSWORD: "app-pass",
   JWT_SECRET: "x".repeat(32),
+  CARD_ENCRYPTION_KEY: PUBLISHED_NON_SECRET_KEYS.testEncryption,
+  CARD_LOOKUP_KEY: PUBLISHED_NON_SECRET_KEYS.testLookup,
+};
+
+// Non-published keys with many distinct byte values, as an operator would generate them
+const prodEnv = {
+  ...validEnv,
+  NODE_ENV: "production",
+  CARD_ENCRYPTION_KEY: "a3f1c97b2e5d4086b1c2d3e4f5061728394a5b6c7d8e9f00112233445566778a",
+  CARD_LOOKUP_KEY: "5b8e1d0c9f7a6e4d3c2b1a0918273645546372819a0b1c2d3e4f5a6b7c8d9e0f",
+  GIFT_CARD_LINK_BASE_URL: "https://gifts.example.com/gift",
 };
 
 test("loadConfig applies defaults and falls back to app creds for admin", () => {
@@ -58,7 +75,7 @@ test("HOST defaults to localhost and can be overridden", () => {
 });
 
 test("in production CORS_ORIGIN must be set explicitly; elsewhere it defaults to *", () => {
-  const prod = { ...validEnv, NODE_ENV: "production" };
+  const prod = prodEnv;
   assert.throws(() => loadConfig(prod), /CORS_ORIGIN is required/);
   assert.throws(() => loadConfig({ ...prod, CORS_ORIGIN: "" }), /CORS_ORIGIN is required/);
   assert.equal(loadConfig({ ...prod, CORS_ORIGIN: "https://a.example" }).corsOrigin, "https://a.example");
@@ -74,6 +91,10 @@ test("CORS_METHODS and CORS_ALLOWED_HEADERS must not parse to an empty list", ()
     );
   }
   assert.deepEqual(loadConfig({ ...validEnv, CORS_METHODS: "GET, PATCH" }).corsMethods, ["GET", "PATCH"]);
+});
+
+test("PATCH is in the default CORS methods", () => {
+  assert.deepEqual(loadConfig(validEnv).corsMethods, ["GET", "POST", "PUT", "PATCH", "DELETE"]);
 });
 
 test("CORS_ORIGIN: * must be used alone", () => {
@@ -155,4 +176,174 @@ test("loadConfig reports database and server problems together in one error", ()
     }
     return true;
   });
+});
+
+const messageOf = (fn: () => unknown): string => {
+  try {
+    fn();
+  } catch (err) {
+    return (err as Error).message;
+  }
+  return assert.fail("expected a ConfigError");
+};
+
+const omit = (env: Record<string, string>, name: string): Record<string, string> =>
+  Object.fromEntries(Object.entries(env).filter(([key]) => key !== name));
+
+const prodWithCors = { ...prodEnv, CORS_ORIGIN: "https://a.example" };
+
+test("card keys are required, and loadConfig applies card defaults", () => {
+  const withoutKeys = omit(omit(validEnv, "CARD_ENCRYPTION_KEY"), "CARD_LOOKUP_KEY");
+  const message = messageOf(() => loadConfig(withoutKeys));
+  assert.match(message, /CARD_ENCRYPTION_KEY is required/);
+  assert.match(message, /CARD_LOOKUP_KEY is required/);
+
+  const cfg = loadConfig(validEnv);
+  assert.equal(cfg.cardEncryptionKey.id, 1);
+  assert.equal(cfg.cardLookupKey.id, 1);
+  assert.equal(cfg.cardEncryptionKey.key.toString("hex"), PUBLISHED_NON_SECRET_KEYS.testEncryption);
+  assert.equal(cfg.giftCardLinkBaseUrl, "http://localhost:3000/gift");
+  assert.equal(cfg.giftCardDevPrintLinks, false);
+});
+
+test("non-hex, wrong-length and low-entropy keys are rejected without echoing the value", () => {
+  const lowEntropy = "0123456789abcdef".repeat(4); // 8 distinct bytes
+  const bad = ["z".repeat(64), "ab".repeat(31), "ab".repeat(33), lowEntropy, "00".repeat(32)];
+  for (const value of bad) {
+    const message = messageOf(() => loadConfig({ ...validEnv, CARD_ENCRYPTION_KEY: value }));
+    assert.match(message, /CARD_ENCRYPTION_KEY/);
+    assert.ok(!message.includes(value), "the error must not echo the key");
+  }
+  assert.match(messageOf(() => loadConfig({ ...validEnv, CARD_ENCRYPTION_KEY: lowEntropy })), /low-entropy/);
+  assert.match(messageOf(() => loadConfig({ ...validEnv, CARD_LOOKUP_KEY: lowEntropy })), /CARD_LOOKUP_KEY is too low-entropy/);
+});
+
+test("every published key passes the 16-distinct-byte rule", () => {
+  for (const hex of Object.values(PUBLISHED_NON_SECRET_KEYS)) {
+    assert.ok(new Set(Buffer.from(hex, "hex")).size >= 16);
+  }
+  const cfg = loadConfig({
+    ...validEnv,
+    CARD_ENCRYPTION_KEY: PUBLISHED_NON_SECRET_KEYS.ciEncryption,
+    CARD_LOOKUP_KEY: PUBLISHED_NON_SECRET_KEYS.ciLookup,
+  });
+  assert.equal(cfg.cardEncryptionKey.key.length, 32);
+});
+
+test("the encryption and lookup keys must differ", () => {
+  const message = messageOf(() => loadConfig({ ...validEnv, CARD_LOOKUP_KEY: validEnv.CARD_ENCRYPTION_KEY }));
+  assert.match(message, /CARD_LOOKUP_KEY must differ from CARD_ENCRYPTION_KEY/);
+  assert.ok(!message.includes(validEnv.CARD_ENCRYPTION_KEY));
+});
+
+test("card key ids must be integers from 1 to 32767", () => {
+  assert.equal(loadConfig({ ...validEnv, CARD_ENCRYPTION_KEY_ID: "32767" }).cardEncryptionKey.id, 32767);
+  assert.equal(loadConfig({ ...validEnv, CARD_LOOKUP_KEY_ID: "2" }).cardLookupKey.id, 2);
+  for (const id of ["0", "32768", "-1", "1.5", "abc"]) {
+    assert.match(messageOf(() => loadConfig({ ...validEnv, CARD_ENCRYPTION_KEY_ID: id })), /CARD_ENCRYPTION_KEY_ID must be/);
+    assert.match(messageOf(() => loadConfig({ ...validEnv, CARD_LOOKUP_KEY_ID: id })), /CARD_LOOKUP_KEY_ID must be/);
+  }
+});
+
+test("published keys are refused in production and accepted in test", () => {
+  assert.ok(loadConfig({ ...validEnv, NODE_ENV: "test" }));
+  assert.ok(loadConfig(prodWithCors));
+  assert.match(
+    messageOf(() =>
+      loadConfig({ ...prodWithCors, CARD_ENCRYPTION_KEY: PUBLISHED_NON_SECRET_KEYS.ciEncryption.toUpperCase() })
+    ),
+    /CARD_ENCRYPTION_KEY is a published test\/CI key/
+  );
+  assert.match(
+    messageOf(() => loadConfig({ ...prodWithCors, CARD_LOOKUP_KEY: PUBLISHED_NON_SECRET_KEYS.testLookup })),
+    /CARD_LOOKUP_KEY is a published test\/CI key/
+  );
+});
+
+test("DB_LOGGING=true is refused in production only", () => {
+  assert.match(messageOf(() => loadConfig({ ...prodWithCors, DB_LOGGING: "true" })), /DB_LOGGING=true is not allowed/);
+  assert.equal(loadConfig({ ...validEnv, DB_LOGGING: "true" }).dbLogging, true);
+  assert.equal(loadConfig({ ...prodWithCors, DB_LOGGING: "false" }).dbLogging, false);
+});
+
+test("GIFT_CARD_LINK_BASE_URL: required and https in production, no fragment anywhere", () => {
+  const withoutUrl = omit(prodWithCors, "GIFT_CARD_LINK_BASE_URL");
+  assert.match(messageOf(() => loadConfig(withoutUrl)), /GIFT_CARD_LINK_BASE_URL is required/);
+  assert.match(
+    messageOf(() => loadConfig({ ...prodWithCors, GIFT_CARD_LINK_BASE_URL: "http://gifts.example.com/gift" })),
+    /GIFT_CARD_LINK_BASE_URL must use https/
+  );
+  for (const url of ["https://gifts.example.com/gift#x", "https://gifts.example.com/gift#"]) {
+    assert.match(
+      messageOf(() => loadConfig({ ...validEnv, GIFT_CARD_LINK_BASE_URL: url })),
+      /must not contain a fragment/
+    );
+  }
+  assert.match(messageOf(() => loadConfig({ ...validEnv, GIFT_CARD_LINK_BASE_URL: "not a url" })), /valid URL/);
+  assert.match(messageOf(() => loadConfig({ ...validEnv, GIFT_CARD_LINK_BASE_URL: "ftp://x.example/g" })), /http\(s\) URL/);
+  assert.equal(
+    loadConfig({ ...validEnv, GIFT_CARD_LINK_BASE_URL: "http://localhost:8080/g" }).giftCardLinkBaseUrl,
+    "http://localhost:8080/g"
+  );
+});
+
+test("GIFT_CARD_DEV_PRINT_LINKS=true is allowed only in development", () => {
+  // NODE_ENV defaults to development
+  assert.equal(loadConfig({ ...validEnv, GIFT_CARD_DEV_PRINT_LINKS: "true" }).giftCardDevPrintLinks, true);
+  assert.equal(
+    loadConfig({ ...validEnv, NODE_ENV: "development", GIFT_CARD_DEV_PRINT_LINKS: "true" }).giftCardDevPrintLinks,
+    true
+  );
+  for (const nodeEnv of ["test", "production"]) {
+    assert.match(
+      messageOf(() => loadConfig({ ...prodWithCors, NODE_ENV: nodeEnv, GIFT_CARD_DEV_PRINT_LINKS: "true" })),
+      /GIFT_CARD_DEV_PRINT_LINKS=true is allowed only/
+    );
+  }
+});
+
+test("loadServerConfig still needs no card keys", () => {
+  const cfg = loadServerConfig({ JWT_SECRET: "x".repeat(32) });
+  assert.ok(!("cardEncryptionKey" in cfg));
+});
+
+test("loadConfig reports card key, link and logging problems together with the rest", () => {
+  const message = messageOf(() =>
+    loadConfig({ NODE_ENV: "production", DB_LOGGING: "true", CARD_ENCRYPTION_KEY: "short" })
+  );
+  for (const name of [
+    "DB_DATABASE",
+    "JWT_SECRET",
+    "CORS_ORIGIN",
+    "CARD_ENCRYPTION_KEY",
+    "CARD_LOOKUP_KEY",
+    "GIFT_CARD_LINK_BASE_URL",
+    "DB_LOGGING",
+  ]) {
+    assert.match(message, new RegExp(name));
+  }
+});
+
+test("loadDispatchConfig needs DB vars and the link URL, not card keys or API secrets", () => {
+  const env = { DB_DATABASE: "gcm", DB_USERNAME: "app", DB_PASSWORD: "app-pass" };
+  const cfg = loadDispatchConfig(env);
+  assert.equal(cfg.dbDatabase, "gcm");
+  assert.equal(cfg.giftCardLinkBaseUrl, "http://localhost:3000/gift");
+  assert.equal(cfg.giftCardDevPrintLinks, false);
+  assert.equal(cfg.nodeEnv, "development");
+  assert.ok(Object.isFrozen(cfg));
+  assert.ok(!("cardEncryptionKey" in cfg));
+
+  const prodMessage = messageOf(() => loadDispatchConfig({ ...env, NODE_ENV: "production", DB_LOGGING: "true" }));
+  assert.match(prodMessage, /GIFT_CARD_LINK_BASE_URL is required/);
+  assert.match(prodMessage, /DB_LOGGING=true is not allowed/);
+  assert.doesNotMatch(prodMessage, /JWT_SECRET|CARD_ENCRYPTION|CARD_LOOKUP/);
+  assert.match(
+    messageOf(() => loadDispatchConfig({ ...env, NODE_ENV: "test", GIFT_CARD_DEV_PRINT_LINKS: "true" })),
+    /GIFT_CARD_DEV_PRINT_LINKS=true is allowed only/
+  );
+  assert.equal(
+    loadDispatchConfig({ ...env, NODE_ENV: "production", GIFT_CARD_LINK_BASE_URL: "https://gifts.example.com/gift" }).nodeEnv,
+    "production"
+  );
 });
