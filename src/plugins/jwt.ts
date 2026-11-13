@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import jwt from "@fastify/jwt";
 import { FastifyInstance, FastifyRequest } from "fastify";
+import { MIN_JWT_SECRET_LENGTH } from "../config";
 import { ForbiddenError, UnauthorizedError } from "../errors";
 import { Role } from "../enums/roles";
 import { ACCESS_TOKEN_TTL_SECONDS } from "../tokens";
@@ -12,6 +13,11 @@ export interface JwtPluginOptions {
 }
 
 export default fp<JwtPluginOptions>(async function (fastify: FastifyInstance, opts) {
+  // loadConfig already enforces this; checked again so a hand-built config cannot sign with a weak key
+  if (typeof opts.secret !== "string" || opts.secret.length < MIN_JWT_SECRET_LENGTH) {
+    throw new Error(`JWT secret must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+  }
+
   await fastify.register(jwt, {
     secret: opts.secret,
     sign: { algorithm: "HS256", expiresIn: ACCESS_TOKEN_TTL_SECONDS },

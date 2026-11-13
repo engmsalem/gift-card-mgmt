@@ -1,6 +1,17 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTestApp, loadTestConfig, setupDatabase, teardownDatabase } from "./helpers";
+import { Config } from "../../src/config";
+import { Role } from "../../src/enums/roles";
+import {
+  bearer,
+  buildTestApp,
+  loadTestConfig,
+  resetDb,
+  send,
+  setupDatabase,
+  signupTenant,
+  teardownDatabase,
+} from "./helpers";
 
 before(async () => {
   await setupDatabase();
@@ -22,4 +33,28 @@ test("two apps in one process use their own config", async () => {
     await appA.close();
     await appB.close();
   }
+});
+
+test("a token signed with one app's JWT_SECRET is rejected by an app with another", async () => {
+  await resetDb();
+  const appA = await buildTestApp(loadTestConfig({ JWT_SECRET: "a".repeat(40) }));
+  const appB = await buildTestApp(loadTestConfig({ JWT_SECRET: "b".repeat(40) }));
+  try {
+    const { adminId, tenantId } = await signupTenant(appA, "isolation", "admin@isolation.example");
+    const token = appA.jwt.sign({ sub: adminId, tid: tenantId, role: Role.ADMIN, typ: "access" });
+    assert.equal((await send(appA, { method: "GET", url: "/users/me", headers: bearer(token) })).statusCode, 200);
+    assert.equal((await send(appB, { method: "GET", url: "/users/me", headers: bearer(token) })).statusCode, 401);
+  } finally {
+    await appA.close();
+    await appB.close();
+  }
+});
+
+test("buildApp rejects a hand-built config with a short JWT secret", async () => {
+  const config: Config = { ...loadTestConfig(), jwtSecret: "too-short" };
+  await assert.rejects(buildTestApp(config), /JWT secret must be at least 32 characters/);
+});
+
+test("loadTestConfig can unset a passthrough variable with undefined", () => {
+  assert.throws(() => loadTestConfig({ JWT_SECRET: undefined }), /JWT_SECRET is required/);
 });

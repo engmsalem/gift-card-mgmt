@@ -1,5 +1,4 @@
 export interface DbConfig {
-  nodeEnv: string;
   dbHost: string;
   dbPort: number;
   dbDatabase: string;
@@ -39,7 +38,7 @@ export class ConfigError extends Error {
 
 type Env = Record<string, string | undefined>;
 
-const MIN_JWT_SECRET_LENGTH = 32;
+export const MIN_JWT_SECRET_LENGTH = 32;
 
 /** Typed readers over one env that record every problem into a shared list. */
 function createReader(env: Env, problems: string[]) {
@@ -78,20 +77,26 @@ function createReader(env: Env, problems: string[]) {
     return raw.split(",").map((item) => item.trim()).filter(Boolean);
   };
 
-  return { str, int, bool, list };
+  // Records a problem that is not tied to a single variable's parsing
+  const problem = (message: string): void => {
+    problems.push(message);
+  };
+
+  return { str, int, bool, list, problem };
 }
 
 type Reader = ReturnType<typeof createReader>;
 
-function readDbConfig(env: Env, problems: string[], read: Reader): DbConfig {
+function readDbConfig(env: Env, read: Reader): DbConfig {
   const dbUsername = read.str("DB_USERNAME");
   const dbPassword = read.str("DB_PASSWORD");
 
   // Admin credentials are a pair: both set, or both unset (then the app credentials are used)
   const adminUserSet = (env.DB_ADMIN_USERNAME ?? "") !== "";
   const adminPasswordSet = (env.DB_ADMIN_PASSWORD ?? "") !== "";
+  const hasAdminPair = adminUserSet && adminPasswordSet;
   if (adminUserSet !== adminPasswordSet) {
-    problems.push(
+    read.problem(
       adminUserSet
         ? "DB_ADMIN_PASSWORD is required when DB_ADMIN_USERNAME is set"
         : "DB_ADMIN_USERNAME is required when DB_ADMIN_PASSWORD is set"
@@ -99,43 +104,42 @@ function readDbConfig(env: Env, problems: string[], read: Reader): DbConfig {
   }
 
   return {
-    nodeEnv: read.str("NODE_ENV", "development"),
     dbHost: read.str("DB_HOST", "localhost"),
     dbPort: read.int("DB_PORT", 5432),
     dbDatabase: read.str("DB_DATABASE"),
     dbUsername,
     dbPassword,
-    dbAdminUsername: adminUserSet && adminPasswordSet ? read.str("DB_ADMIN_USERNAME") : dbUsername,
-    dbAdminPassword: adminPasswordSet && adminUserSet ? read.str("DB_ADMIN_PASSWORD") : dbPassword,
+    dbAdminUsername: hasAdminPair ? read.str("DB_ADMIN_USERNAME") : dbUsername,
+    dbAdminPassword: hasAdminPair ? read.str("DB_ADMIN_PASSWORD") : dbPassword,
     dbLogging: read.bool("DB_LOGGING", false),
   };
 }
 
-function readServerConfig(env: Env, problems: string[], read: Reader): ServerConfig {
+function readServerConfig(env: Env, read: Reader): ServerConfig {
   const nodeEnv = read.str("NODE_ENV", "development");
 
   // No silent wildcard in production: the operator has to choose the allowed origins
   if (nodeEnv === "production" && (env.CORS_ORIGIN === undefined || env.CORS_ORIGIN === "")) {
-    problems.push('CORS_ORIGIN is required when NODE_ENV is "production" (use "*" to allow any origin)');
+    read.problem('CORS_ORIGIN is required when NODE_ENV is "production" (use "*" to allow any origin)');
   }
   const corsOrigins = read.list("CORS_ORIGIN", ["*"]);
-  if (corsOrigins.length === 0) problems.push("CORS_ORIGIN must contain at least one origin");
+  if (corsOrigins.length === 0) read.problem("CORS_ORIGIN must contain at least one origin");
   if (corsOrigins.length > 1 && corsOrigins.includes("*")) {
-    problems.push('CORS_ORIGIN "*" must be used alone, not mixed with other origins');
+    read.problem('CORS_ORIGIN "*" must be used alone, not mixed with other origins');
   }
 
   const corsMethods = read.list("CORS_METHODS", ["GET", "POST", "PUT", "DELETE"]);
-  if (corsMethods.length === 0) problems.push("CORS_METHODS must contain at least one method");
+  if (corsMethods.length === 0) read.problem("CORS_METHODS must contain at least one method");
   const corsAllowedHeaders = read.list("CORS_ALLOWED_HEADERS", ["Content-Type", "Authorization"]);
   if (corsAllowedHeaders.length === 0) {
-    problems.push("CORS_ALLOWED_HEADERS must contain at least one header");
+    read.problem("CORS_ALLOWED_HEADERS must contain at least one header");
   }
 
   let jwtSecret = env.JWT_SECRET ?? "";
   if (jwtSecret === "") {
-    problems.push("JWT_SECRET is required");
+    read.problem("JWT_SECRET is required");
   } else if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
-    problems.push(
+    read.problem(
       `JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters (got ${jwtSecret.length})`
     );
     jwtSecret = "";
@@ -167,7 +171,7 @@ function throwIfProblems(problems: string[]): void {
  */
 export function loadDbConfig(env: Env): Readonly<DbConfig> {
   const problems: string[] = [];
-  const config = readDbConfig(env, problems, createReader(env, problems));
+  const config = readDbConfig(env, createReader(env, problems));
   throwIfProblems(problems);
   return Object.freeze(config);
 }
@@ -175,7 +179,7 @@ export function loadDbConfig(env: Env): Readonly<DbConfig> {
 /** HTTP server settings only. Collects every problem and throws once. */
 export function loadServerConfig(env: Env): Readonly<ServerConfig> {
   const problems: string[] = [];
-  const config = readServerConfig(env, problems, createReader(env, problems));
+  const config = readServerConfig(env, createReader(env, problems));
   throwIfProblems(problems);
   return Object.freeze(config);
 }
@@ -187,7 +191,7 @@ export function loadServerConfig(env: Env): Readonly<ServerConfig> {
 export function loadConfig(env: Env): Readonly<Config> {
   const problems: string[] = [];
   const read = createReader(env, problems);
-  const config: Config = { ...readDbConfig(env, problems, read), ...readServerConfig(env, problems, read) };
+  const config: Config = { ...readDbConfig(env, read), ...readServerConfig(env, read) };
   throwIfProblems(problems);
   return Object.freeze(config);
 }

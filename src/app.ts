@@ -34,25 +34,31 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     },
   });
 
-  // Expose the TypeORM DataSource to services as `fastify.db`
-  app.decorate("db", opts.dataSource);
+  // Once Fastify exists, a failed registration must not leave it (and its hooks) open
+  try {
+    // Expose the TypeORM DataSource to services as `fastify.db`
+    app.decorate("db", opts.dataSource);
 
-  // Register plugins in order
-  await app.register(errorHandler); // Register error handler first
-  // CORS before rate limiting: its onRequest hook then sets CORS headers on every response
-  // (including 429s) and answers preflight OPTIONS requests before they are counted
-  await app.register(cors, {
-    origin: opts.config.corsOrigin,
-    methods: opts.config.corsMethods,
-    allowedHeaders: opts.config.corsAllowedHeaders,
-  });
-  await app.register(rateLimit);
-  await app.register(jwtPlugin, { secret: opts.config.jwtSecret }); // Then authentication
+    // Register plugins in order
+    await app.register(errorHandler); // Register error handler first
+    // CORS before rate limiting: its onRequest hook then sets CORS headers on every response
+    // (including 429s) and answers preflight OPTIONS requests before they are counted
+    await app.register(cors, {
+      origin: opts.config.corsOrigin,
+      methods: opts.config.corsMethods,
+      allowedHeaders: opts.config.corsAllowedHeaders,
+    });
+    await app.register(rateLimit);
+    await app.register(jwtPlugin, { secret: opts.config.jwtSecret }); // Then authentication
 
-  // Register routes last
-  await app.register(authRoutes);
-  await app.register(tenantRoutes);
-  await app.register(userRoutes);
+    // Register routes last
+    await app.register(authRoutes);
+    await app.register(tenantRoutes);
+    await app.register(userRoutes);
 
-  return app;
+    return app;
+  } catch (err) {
+    await app.close().catch(() => undefined);
+    throw err;
+  }
 }

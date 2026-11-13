@@ -1,6 +1,5 @@
 import "dotenv/config";
 import "reflect-metadata";
-import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { createDataSource } from "./data-source";
@@ -13,30 +12,33 @@ async function main() {
   await dataSource.initialize();
   console.log("Database connected");
 
-  let app: FastifyInstance | undefined;
   try {
-    app = await buildApp({ config, dataSource });
-    const running = app;
+    // buildApp closes its own instance if registration fails
+    const app = await buildApp({ config, dataSource });
+    try {
+      await app.listen({ host: config.host, port: config.port });
+    } catch (err) {
+      await app.close().catch(() => undefined);
+      throw err;
+    }
 
+    // Only once listening: before that, a signal should simply end the process
     const shutdown = async (signal: string) => {
-      running.log.info(`${signal} received, shutting down`);
+      app.log.info(`${signal} received, shutting down`);
       try {
-        await running.close();
+        await app.close();
         await dataSource.destroy();
         process.exit(0);
       } catch (err) {
-        running.log.error(err);
+        app.log.error(err);
         process.exit(1);
       }
     };
     process.once("SIGINT", () => void shutdown("SIGINT"));
     process.once("SIGTERM", () => void shutdown("SIGTERM"));
-
-    await running.listen({ host: config.host, port: config.port });
   } catch (err) {
-    // Startup failed after the pool opened (e.g. port in use): release everything so the
+    // Startup failed after the pool opened (e.g. port in use): release the pool so the
     // process can exit, then let the handler below report the original error
-    await app?.close().catch(() => undefined);
     await dataSource.destroy().catch(() => undefined);
     throw err;
   }

@@ -127,6 +127,7 @@ test("loadDbConfig needs only DB vars: no JWT_SECRET or CORS_ORIGIN even in prod
   assert.equal(cfg.dbDatabase, "gcm");
   assert.equal(cfg.dbAdminUsername, "owner");
   assert.ok(Object.isFrozen(cfg));
+  assert.ok(!("nodeEnv" in cfg), "NODE_ENV belongs to the server config only");
   assert.throws(() => loadDbConfig({}), (err: Error) => {
     assert.match(err.message, /DB_DATABASE/);
     assert.doesNotMatch(err.message, /JWT_SECRET|CORS_/);
@@ -143,6 +144,7 @@ test("loadServerConfig errors name only server vars", () => {
   });
   const cfg = loadServerConfig({ JWT_SECRET: "x".repeat(32), PORT: "4000" });
   assert.equal(cfg.port, 4000);
+  assert.equal(cfg.nodeEnv, "development");
   assert.equal(cfg.corsOrigin, "*");
 });
 

@@ -13,6 +13,8 @@ import { Config, loadConfig } from "../../src/config";
 import { createDataSource } from "../../src/data-source";
 import { assertTestDatabase, resolveTestDatabase } from "../support/test-db";
 
+// Config is loaded when this module is imported, on purpose: the suite cannot run without these
+// variables, and the ConfigError raised here names whichever ones are missing.
 const testDb = resolveTestDatabase(process.env);
 assertTestDatabase(testDb, process.env);
 
@@ -31,10 +33,10 @@ const ENV_PASSTHROUGH = [
 
 /**
  * Config for the test database. Hermetic: only ENV_PASSTHROUGH comes from process.env.
- * `overrides` are extra env vars (e.g. CORS_ORIGIN) applied last, except DB_DATABASE, which is
- * always the test database.
+ * `overrides` are extra env vars (e.g. CORS_ORIGIN) applied last; an `undefined` value removes a
+ * variable (including a passthrough one). DB_DATABASE is always the test database.
  */
-export function loadTestConfig(overrides: Record<string, string> = {}): Readonly<Config> {
+export function loadTestConfig(overrides: Record<string, string | undefined> = {}): Readonly<Config> {
   const fromEnv: Record<string, string | undefined> = {};
   for (const name of ENV_PASSTHROUGH) fromEnv[name] = process.env[name];
   return loadConfig({
