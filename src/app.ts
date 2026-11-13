@@ -8,6 +8,7 @@ import errorHandler from "./plugins/error-handler";
 import jwtPlugin from "./plugins/jwt";
 import rateLimit from "./plugins/rate-limit";
 import authRoutes from "./routes/authRoutes";
+import giftCardProgramRoutes from "./routes/giftCardProgramRoutes";
 import tenantRoutes from "./routes/tenantRoutes";
 import userRoutes from "./routes/userRoutes";
 import { verifyCardKeys } from "./services/cardKeyCheck";
@@ -66,6 +67,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(authRoutes);
     await app.register(tenantRoutes);
     await app.register(userRoutes);
+    await app.register(giftCardProgramRoutes);
 
     return app;
   } catch (err) {
