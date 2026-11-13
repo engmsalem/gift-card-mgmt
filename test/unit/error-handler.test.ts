@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Fastify, { FastifyInstance } from "fastify";
+import { QueryFailedError } from "typeorm";
 import errorHandler from "../../src/plugins/error-handler";
 import { CardCryptoError } from "../../src/gift-cards/card-crypto";
 import {
@@ -115,21 +116,19 @@ async function logsFor(error: unknown): Promise<{ status: number; lines: Record<
 }
 
 function queryFailed(code: string): Error {
-  // The shape of TypeORM's QueryFailedError over node-postgres
-  return Object.assign(new Error('insert into x values ($1) -- marker@example.com'), {
-    name: "QueryFailedError",
-    query: "INSERT INTO gift_card_deliveries (recipient_email) VALUES ($1)",
-    parameters: ["marker@example.com", "4111111111111111"],
-    driverError: Object.assign(new Error("Failing row contains (marker@example.com)"), {
-      code,
-      detail: "Failing row contains (marker@example.com)",
-      where: "SQL statement with 4111111111111111",
-      constraint: "gift_card_deliveries_status_check",
-      table: "gift_card_deliveries",
-    }),
+  // A real QueryFailedError over a real pg DatabaseError, carrying row data in every free-text field
+  const driverError = Object.assign(new Error("Failing row contains (marker@example.com)"), {
     code,
     detail: "Failing row contains (marker@example.com)",
+    where: "SQL statement with 4111111111111111",
+    constraint: "gift_card_deliveries_status_check",
+    table: "gift_card_deliveries",
   });
+  return new QueryFailedError(
+    "INSERT INTO gift_card_deliveries (recipient_email) VALUES ($1)",
+    ["marker@example.com", "4111111111111111"],
+    driverError
+  );
 }
 
 test("a database error on the 500 path is logged as name, code, constraint and table only", async () => {
@@ -175,4 +174,15 @@ test("an error with a database cause logs the cause reduced, not whole", async (
   assert.equal(err.message, "card number collision");
   assert.equal(err.cause.code, "23505");
   assert.ok(!raw.includes("marker@example.com") && !raw.includes("4111111111111111"), raw);
+});
+
+test("a Node errno error with a five character code keeps its message and stack in the log", async () => {
+  for (const code of ["EPIPE", "EPERM", "EBUSY", "EBADF", "EXDEV", "EROFS"]) {
+    const { lines, raw } = await logsFor(Object.assign(new Error(`write ${code} on the socket`), { code }));
+    const line = lines.find((l) => l.msg === "request failed");
+    assert.ok(line, raw);
+    const err = line.err as { message: string; stack: string };
+    assert.equal(err.message, `write ${code} on the socket`);
+    assert.match(err.stack, /Error/);
+  }
 });

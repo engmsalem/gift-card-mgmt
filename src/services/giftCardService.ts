@@ -275,11 +275,17 @@ interface PreparedIssue {
   sendAt: string | null;
 }
 
-/** The instant as an ISO string, null when absent. Rejects a value that is not a real date. */
+/**
+ * The instant as an ISO string, null when absent. Rejects a value that is not a real date, or one
+ * more than MAX_SEND_AHEAD_DAYS ahead of the app clock (checked before anything is written).
+ */
 function parseSendAt(sendAt: string | undefined): string | null {
   if (sendAt === undefined) return null;
   const date = new Date(sendAt);
   if (Number.isNaN(date.getTime())) throw new BadRequestError("sendAt must be a valid date-time");
+  if (date.getTime() > Date.now() + MAX_SEND_AHEAD_DAYS * 86_400_000) {
+    throw new BadRequestError(`sendAt must be within ${MAX_SEND_AHEAD_DAYS} days`);
+  }
   return date.toISOString();
 }
 
@@ -464,12 +470,6 @@ export class GiftCardService {
 
     // 9. Delivery
     const sendAt = prepared.sendAt;
-    const [window] = await returningRows<{ ok: boolean }>(
-      em,
-      `SELECT ($1::timestamptz IS NULL OR $1::timestamptz <= now() + make_interval(days => $2::int)) AS ok`,
-      [sendAt, MAX_SEND_AHEAD_DAYS]
-    );
-    if (!window.ok) throw new BadRequestError(`sendAt must be within ${MAX_SEND_AHEAD_DAYS} days`);
     await returningRows(
       em,
       `INSERT INTO gift_card_deliveries (tenant_id, gift_card_id, recipient_name, recipient_email, sender_name,

@@ -338,7 +338,7 @@ test("same key with a different body -> 409, nothing written", async () => {
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
   assert.equal((await issue(a.admin, body)).statusCode, 201);
-  for (const change of [{ amount: 5001 }, { senderName: "Someone Else" }, { message: "Other" }, { sendAt: "2030-01-01T00:00:00Z" }]) {
+  for (const change of [{ amount: 5001 }, { senderName: "Someone Else" }, { message: "Other" }, { sendAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString() }]) {
     const res = await issue(a.admin, { ...body, ...change });
     assert.equal(res.statusCode, 409, res.body);
     assert.deepEqual(res.json(), { error: "Idempotency key already used with a different request" });
@@ -665,6 +665,26 @@ test("sendAt: a future time is kept; beyond 365 days -> 400 with nothing persist
   assert.equal(res.statusCode, 400, res.body);
   assert.equal(await cardCount(), 1, "the failed issue rolled back its card, ledger row and audit row");
   assert.deepEqual(await auditActions(), ["gift_card.issued"]);
+});
+
+test("sendAt beyond the window is rejected before any lock or write", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const far = new Date(Date.now() + 366 * 24 * 3600 * 1000).toISOString();
+
+  // The program is locked, so an issue that reached the transaction would wait here
+  const tx = await openAdminTransaction();
+  try {
+    await tx.query(`SELECT 1 FROM gift_card_programs WHERE id = $1 FOR UPDATE`, [programId]);
+    const pending = issue(a.admin, issueBody(programId, { sendAt: far }));
+    const raced = await Promise.race([pending, new Promise<"blocked">((r) => setTimeout(() => r("blocked"), 1500))]);
+    assert.notEqual(raced, "blocked", "the sendAt check ran before the transaction");
+    assert.equal((raced as LightMyRequestResponse).statusCode, 400);
+    assert.deepEqual((raced as LightMyRequestResponse).json(), { error: "sendAt must be within 365 days" });
+  } finally {
+    await tx.rollback();
+  }
+  assert.equal(await cardCount(), 0);
 });
 
 test("issue and program update serialize: an update that holds the program makes the issue wait, then see it", async () => {

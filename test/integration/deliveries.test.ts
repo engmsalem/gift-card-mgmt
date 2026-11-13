@@ -595,6 +595,67 @@ test("a stale sending delivery is reclaimed with a new token; a fresh one is lef
   assert.ok(row.token_hash && !row.token_hash.equals(oldHash), "a new token replaces the lost one");
 });
 
+test("a reclaimed sending delivery that used every attempt is failed, not sent", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
+  await adminQuery(
+    `UPDATE gift_card_deliveries SET status = 'sending', attempts = 5, claimed_at = now() - interval '11 minutes',
+        token_hash = $2, token_expires_at = now() + interval '90 days' WHERE id = $1`,
+    [delivery.id, randomBytes(32)]
+  );
+
+  const dispatcher = makeDispatcher(sender, captureLog().log);
+  assert.equal(await dispatcher.dispatch({}), 1, "claimed");
+  assert.equal(sender.messages.length, 0, "nothing sent");
+  const row = await deliveryRow(delivery.id);
+  assert.equal(row.status, "failed");
+  assert.equal(row.attempts, 5, "no further attempt is counted");
+  assert.equal(row.last_error, "LeaseExpired");
+  assert.equal(row.claimed_at, null);
+  assert.equal(row.token_hash, null);
+  assert.equal(row.token_expires_at, null);
+  assert.equal(await dispatcher.dispatch({}), 0, "a failed delivery is never claimed again");
+});
+
+test("a failed send on the last allowed attempt cannot overflow the backoff", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
+  // attempts is 99 after the claim: power(2, 99) would overflow an int without the cap
+  await adminQuery(`UPDATE gift_card_deliveries SET attempts = 98 WHERE id = $1`, [delivery.id]);
+  await makeDue(delivery.id);
+  const failing = new RecordingDeliverySender("throw");
+  const dispatcher = makeDispatcher(failing, captureLog().log);
+  assert.equal(await dispatcher.dispatch({ throwOnError: true }), 1);
+  const row = await deliveryRow(delivery.id);
+  assert.equal(row.status, "failed");
+  assert.equal(row.attempts, 99);
+});
+
+test("dispatch with a deliveryId opens exactly one claim transaction", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
+  await makeDue(delivery.id);
+  const db = getAppDataSource();
+  const original = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
+  let claims = 0;
+  (db as unknown as { transaction: unknown }).transaction = (...args: unknown[]) => {
+    claims++;
+    return original(...args);
+  };
+  try {
+    const dispatcher = makeDispatcher(sender, captureLog().log);
+    assert.equal(await dispatcher.dispatch({ deliveryId: delivery.id }), 1);
+    assert.equal(claims, 1);
+    assert.equal(await dispatcher.dispatch({ deliveryId: delivery.id }), 0, "nothing due: one claim, no match");
+    assert.equal(claims, 2);
+  } finally {
+    delete (db as unknown as { transaction?: unknown }).transaction;
+  }
+});
+
 test("two concurrent dispatches send each delivery once", async () => {
   const a = await setupTenant("acme", "ada@acme.com");
   const programId = await createProgram(a.admin);

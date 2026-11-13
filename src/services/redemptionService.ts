@@ -4,8 +4,6 @@ import { ConflictError, NotFoundError } from "../errors";
 import type { CardCrypto } from "../gift-cards/card-crypto";
 import { normalizeCardNumber } from "../gift-cards/card-number";
 import {
-  CARD_EXPIRED_MESSAGE,
-  CARD_NOT_ACTIVE_MESSAGE,
   INSUFFICIENT_BALANCE_MESSAGE,
   PIN_LOCK_MINUTES,
   decidePinAttempt,
@@ -92,9 +90,8 @@ function throwFor(outcome: Exclude<RedeemOutcome, { kind: "done" }>): never {
     case "idempotency_conflict":
       throw idempotencyConflict();
     case "expired":
-      throw new ConflictError(CARD_EXPIRED_MESSAGE);
     case "not_active":
-      throw new ConflictError(CARD_NOT_ACTIVE_MESSAGE);
+      throw rejectionError(outcome.kind);
     case "insufficient_balance":
       throw new ConflictError(INSUFFICIENT_BALANCE_MESSAGE);
   }
@@ -181,18 +178,17 @@ export class RedemptionService {
       return { kind: decision.reason };
     }
 
-    // 4. Balance. The card row is locked, so the conditions always hold; they keep the write
-    // correct on its own if the lock were ever missing
+    // 4. Balance, as the decider computed it from the locked row. The conditions always hold under
+    // the lock; matching the balance the decider saw keeps a stale write (a lost update) from
+    // landing if the lock were ever missing
     const [updated] = await returningRows<{ balance: number }>(
       em,
       `UPDATE gift_cards
-          SET balance = balance - $3::int,
-              status = CASE WHEN balance - $3::int = 0 THEN 'depleted' ELSE status END,
-              updated_at = now()
-        WHERE id = $1 AND tenant_id = $2 AND status = 'active' AND balance >= $3::int
+          SET balance = $3::int, status = $4, updated_at = now()
+        WHERE id = $1 AND tenant_id = $2 AND status = 'active' AND balance = $5::int
           AND (expires_at IS NULL OR expires_at > now())
     RETURNING balance`,
-      [card.id, ctx.tenantId, input.amount]
+      [card.id, ctx.tenantId, decision.newBalance, decision.newStatus, card.balance]
     );
     if (!updated) throw new Error("redeem matched no card row under the row lock");
 
@@ -283,13 +279,14 @@ export class RedemptionService {
     const decision = decideRefund(snapshot(card), input.amount);
     if (!decision.ok) throw rejectionError(decision.reason);
 
-    // 7. Credit and ledger
+    // 7. Credit and ledger. Matching the state the decider saw keeps a stale write from landing if
+    // the row lock were ever missing
     const [updated] = await returningRows<{ balance: number }>(
       em,
-      `UPDATE gift_cards SET balance = balance + $3::int, status = 'active', updated_at = now()
-        WHERE id = $1 AND tenant_id = $2
+      `UPDATE gift_cards SET balance = $3::int, status = $4, updated_at = now()
+        WHERE id = $1 AND tenant_id = $2 AND balance = $5::int AND status = $6
     RETURNING balance`,
-      [card.id, ctx.tenantId, input.amount]
+      [card.id, ctx.tenantId, decision.newBalance, decision.newStatus, card.balance, card.status]
     );
     if (!updated) throw new Error("refund matched no card row under the row lock");
     const [transaction] = await returningRows<TransactionRow>(

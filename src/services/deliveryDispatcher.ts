@@ -60,6 +60,8 @@ const DEFAULT_LIMIT = 50;
 // A `sending` row older than this lease is reclaimed. It must exceed MAX_SEND_TIMEOUT_MS plus a margin.
 const LEASE_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
+// Caps the backoff exponent so power(2, n) never overflows an int, whatever `attempts` holds
+const MAX_BACKOFF_EXPONENT = 10;
 
 /** The send did not settle within the timeout (the sender may have ignored the abort signal). */
 class SendTimeout extends Error {
@@ -83,6 +85,8 @@ function raceTimeout(work: Promise<void>, signal: AbortSignal): Promise<void> {
 
 interface ClaimRow {
   id: string;
+  status: string;
+  attempts: number;
   card_status: string;
   card_expired: boolean;
 }
@@ -139,6 +143,8 @@ export class DeliveryDispatcher {
         if (next === "none") break;
         claimed++;
         if (next !== "cancelled") await this.sendAndRecord(next);
+        // A single target is claimed at most once: another claim would only find nothing
+        if (input.deliveryId !== undefined) break;
       } catch (err) {
         if (input.throwOnError) throw err;
         this.log.warn({ deliveryId: input.deliveryId, errName: errorName(err) }, "gift card dispatch pass failed");
@@ -148,12 +154,15 @@ export class DeliveryDispatcher {
     return claimed;
   }
 
-  /** One claim transaction. `cancelled` means the card was voided or expired and nothing was sent. */
+  /**
+   * One claim transaction. `cancelled` means nothing was sent: the card was voided or expired, or a
+   * reclaimed delivery had used all its attempts and was marked failed.
+   */
   private claim(deliveryId: string | null): Promise<ClaimedDelivery | "cancelled" | "none"> {
     return this.db.transaction("READ COMMITTED", async (em) => {
       const [row] = await returningRows<ClaimRow>(
         em,
-        `SELECT d.id, c.status AS card_status,
+        `SELECT d.id, d.status, d.attempts, c.status AS card_status,
                 (c.expires_at IS NOT NULL AND c.expires_at <= now()) AS card_expired
            FROM gift_card_deliveries d
            JOIN gift_cards c ON c.id = d.gift_card_id AND c.tenant_id = d.tenant_id
@@ -171,6 +180,18 @@ export class DeliveryDispatcher {
         await em.query(
           `UPDATE gift_card_deliveries SET status = 'cancelled', claimed_at = NULL, token_hash = NULL,
               token_expires_at = NULL, updated_at = now()
+            WHERE id = $1`,
+          [row.id]
+        );
+        return "cancelled";
+      }
+
+      // A reclaimed row (its sender died mid-send) that has used every attempt is failed, not sent:
+      // otherwise a send that always kills the process would be retried every lease, forever
+      if (row.status === "sending" && row.attempts >= MAX_ATTEMPTS) {
+        await em.query(
+          `UPDATE gift_card_deliveries SET status = 'failed', last_error = 'LeaseExpired', claimed_at = NULL,
+              token_hash = NULL, token_expires_at = NULL, updated_at = now()
             WHERE id = $1`,
           [row.id]
         );
@@ -269,7 +290,7 @@ export class DeliveryDispatcher {
             this.db.manager,
             `UPDATE gift_card_deliveries
                 SET status = CASE WHEN attempts >= $4::int THEN 'failed' ELSE 'scheduled' END,
-                    next_attempt_at = now() + make_interval(mins => power(2, attempts)::int),
+                    next_attempt_at = now() + make_interval(mins => power(2, LEAST(attempts, ${MAX_BACKOFF_EXPONENT}))::int),
                     last_error = left($3, 64), claimed_at = NULL,
                     token_hash = CASE WHEN attempts >= $4::int THEN NULL ELSE token_hash END,
                     token_expires_at = CASE WHEN attempts >= $4::int THEN NULL ELSE token_expires_at END,

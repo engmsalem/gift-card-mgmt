@@ -1,5 +1,6 @@
 import fp from "fastify-plugin";
 import { FastifyInstance, FastifyRequest, FastifyReply, FastifyError } from "fastify";
+import { QueryFailedError } from "typeorm";
 import { AppError } from "../errors";
 import { CardCryptoError } from "../gift-cards/card-crypto";
 
@@ -26,8 +27,12 @@ function isRetryableConflict(error: unknown): boolean {
   );
 }
 
-// A five character SQLSTATE; Node and Fastify error codes (ECONNREFUSED, FST_ERR_...) do not match
-const SQLSTATE = /^[0-9A-Z]{5}$/;
+// A database error is recognised by its origin, never by the shape of its `code`: Node errno codes
+// (EPIPE, EPERM, EBUSY...) are five upper-case characters too, and must keep their message and stack.
+// TypeORM wraps every driver (pg) error raised by a query in a QueryFailedError.
+function isDatabaseError(error: unknown): boolean {
+  return error instanceof QueryFailedError;
+}
 
 type DriverFields = { code?: unknown; constraint?: unknown; table?: unknown; driverError?: DriverFields };
 
@@ -47,7 +52,7 @@ function loggableError(error: unknown, depth = 0): Record<string, unknown> {
   const e = error as Error & DriverFields & { cause?: unknown };
   const name = typeof e.name === "string" ? e.name : "Error";
   const code = stringField(e, "code");
-  if ((code !== undefined && SQLSTATE.test(code)) || e.driverError !== undefined) {
+  if (isDatabaseError(error)) {
     return { name, code, constraint: stringField(e, "constraint"), table: stringField(e, "table") };
   }
   const reduced: Record<string, unknown> = { name, message: e.message, stack: e.stack };
