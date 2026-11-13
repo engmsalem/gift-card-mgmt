@@ -9,9 +9,11 @@ import jwtPlugin from "./plugins/jwt";
 import rateLimit from "./plugins/rate-limit";
 import authRoutes from "./routes/authRoutes";
 import giftCardProgramRoutes from "./routes/giftCardProgramRoutes";
+import giftCardRoutes from "./routes/giftCardRoutes";
 import tenantRoutes from "./routes/tenantRoutes";
 import userRoutes from "./routes/userRoutes";
 import { verifyCardKeys } from "./services/cardKeyCheck";
+import { DeliveryDispatcher } from "./services/deliveryDispatcher";
 
 export interface BuildAppOptions {
   config: Config;
@@ -68,6 +70,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(tenantRoutes);
     await app.register(userRoutes);
     await app.register(giftCardProgramRoutes);
+    // The stub dispatcher does nothing until the delivery phase replaces it
+    await app.register(giftCardRoutes, { cardCrypto, dispatcher: new DeliveryDispatcher() });
 
     return app;
   } catch (err) {

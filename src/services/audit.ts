@@ -10,7 +10,13 @@ export type AuditEntry =
   | {
       action: "gift_card_program.updated";
       details: { programId: string; changes: { field: string; from: AuditValue; to: AuditValue }[] };
-    };
+    }
+  | { action: "gift_card.issued"; details: { giftCardId: string; programId: string; amount: number } }
+  | {
+      action: "gift_card.suspended" | "gift_card.resumed" | "gift_card.unlocked" | "gift_card.pin_locked";
+      details: { giftCardId: string };
+    }
+  | { action: "gift_card.voided"; details: { giftCardId: string; voidedAmount: number } };
 
 /**
  * Appends an audit row using the caller's entity manager, so it commits or rolls back with the

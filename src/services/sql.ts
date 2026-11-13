@@ -16,3 +16,16 @@ export async function returningRows<T>(em: EntityManager, sql: string, params: u
   }
   return result as T[];
 }
+
+/**
+ * The constraint name of a PostgreSQL unique violation (`23505`), or null for any other error.
+ * TypeORM's QueryFailedError copies the driver error's fields onto itself and keeps the original
+ * under `driverError`, so both are read.
+ */
+export function uniqueViolationConstraint(err: unknown): string | null {
+  if (typeof err !== "object" || err === null) return null;
+  const e = err as { code?: unknown; constraint?: unknown; driverError?: { code?: unknown; constraint?: unknown } };
+  if (e.code !== "23505" && e.driverError?.code !== "23505") return null;
+  const constraint = e.constraint ?? e.driverError?.constraint;
+  return typeof constraint === "string" ? constraint : null;
+}

@@ -60,3 +60,62 @@ export const giftCardProgramResponse = {
     updatedAt: { type: "string", format: "date-time" },
   },
 } as const;
+
+export const giftCardResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    programId: { type: "string", format: "uuid" },
+    referenceNumber: { type: "string" },
+    last4: { type: "string" },
+    currency: { type: "string" },
+    currencyExponent: { type: "integer" },
+    initialAmount: { type: "integer" },
+    balance: { type: "integer" },
+    status: { type: "string", enum: ["active", "suspended", "depleted", "voided", "expired"] },
+    hasPin: { type: "boolean" },
+    expiresAt: { type: ["string", "null"], format: "date-time" },
+    pinLocked: { type: "boolean" },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+} as const;
+
+export const giftCardDeliveryResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    recipientName: { type: "string" },
+    recipientEmail: { type: "string" },
+    senderName: { type: "string" },
+    message: { type: ["string", "null"] },
+    sendAt: { type: "string", format: "date-time" },
+    status: { type: "string", enum: ["scheduled", "sending", "sent", "failed", "cancelled"] },
+    attempts: { type: "integer" },
+    sentAt: { type: ["string", "null"], format: "date-time" },
+    openedAt: { type: ["string", "null"], format: "date-time" },
+    revealCount: { type: "integer" },
+    lastRevealedAt: { type: ["string", "null"], format: "date-time" },
+  },
+} as const;
+
+export const giftCardWithDeliveryResponse = {
+  type: "object",
+  properties: { card: giftCardResponse, delivery: giftCardDeliveryResponse },
+} as const;
+
+export const giftCardTransactionResponse = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    giftCardId: { type: "string", format: "uuid" },
+    type: { type: "string", enum: ["issue", "redeem", "refund", "void"] },
+    amount: { type: "integer" },
+    currency: { type: "string" },
+    balanceAfter: { type: "integer" },
+    relatedTransactionId: { type: ["string", "null"], format: "uuid" },
+    externalReference: { type: ["string", "null"] },
+    actorUserId: { type: "string", format: "uuid" },
+    createdAt: { type: "string", format: "date-time" },
+  },
+} as const;
