@@ -4,7 +4,7 @@ A multi-tenant **gift card management API** built with Fastify, TypeORM and Post
 
 The goal is a backend where tenants (merchants) issue gift cards and their staff can redeem and refund balances, with an audit trail.
 
-> **Status: early prototype / work in progress.** Tenant signup, user management and authentication are implemented and tested. Gift card, transaction and audit features have a database schema but no API yet. See [Project status](#project-status).
+> **Status: work in progress.** Tenant signup, user management, authentication and digital gift cards (programs, issuing, email delivery, redemption, refunds, audit trail) are implemented and tested. Emails are only logged for now, not sent. See [Project status](#project-status).
 
 ---
 
@@ -30,23 +30,31 @@ src/
 ├── data-source.ts           # createDataSource(config, "app" | "admin"): DataSource factory
 ├── migration-data-source.ts # Entry point for the TypeORM CLI (admin role)
 ├── migrations/              # Schema history; the source of truth for the database schema
-├── entities/                # Tenant, User, RefreshToken
+├── entities/                # Tenant, User, RefreshToken, AuditLog, GiftCardProgram, GiftCard,
+│                            # GiftCardTransaction, GiftCardDelivery, GiftCardKeyCheck
 ├── enums/roles.ts           # admin | staff
 ├── errors.ts                # AppError + 400/401/403/404/409 subclasses
 ├── credentials.ts           # Email normalisation/validation, bcrypt 72-byte check
 ├── tokens.ts                # Refresh token generation and hashing, token lifetimes
+├── gift-cards/              # Pure gift card rules (no database, framework or config imports; ESLint enforces it):
+│                            # card numbers, money/countries, program rules, card states, card crypto,
+│                            # delivery tokens, request hashes, email masking
+├── delivery/                # Email senders: log-only (default) and the development console sender
 ├── plugins/
-│   ├── error-handler.ts     # Maps AppError / validation / unique violations to status codes
+│   ├── error-handler.ts     # Maps errors to status codes; logs database errors without parameters
 │   ├── jwt.ts               # Access token signing/verification, `authenticate`, `requireRole`
 │   └── rate-limit.ts        # 100 requests / minute per IP (login: 10, tenant signup: 5)
-├── routes/                  # tenantRoutes, authRoutes, userRoutes, shared response schemas
-├── services/                # TenantService, AuthService, UserService
+├── routes/                  # tenant, auth, user, gift card program, gift card and gift card link routes
+├── services/                # Tenant, Auth, User, GiftCardProgram, GiftCard, Redemption, Delivery services,
+│                            # the delivery dispatcher, audit writer and startup key check
+├── scripts/                 # Cron entry points: purge expired refresh tokens, dispatch gift card emails
 └── types/requests.d.ts      # Fastify / JWT type augmentations
 
 test/
 ├── unit/                    # No database needed
 ├── integration/             # Real PostgreSQL via app.inject(); helpers.ts sets up the test DB
-└── support/test-db.ts       # Guard that refuses to reset any database not named *_test
+└── support/                 # test-db.ts (refuses to reset any database not named *_test),
+                             # lock-staging.ts (deterministic concurrency tests), recording sender
 
 db/init/01-app-role.sh       # First-start Postgres script: creates the app role and the _test database
 docker-compose.yml           # PostgreSQL, configured from .env
@@ -66,9 +74,14 @@ Defined by the migrations in `src/migrations/`. All tenant-owned tables carry a 
 | `tenants`        | Merchants, each with a unique `subdomain`                               | Yes          |
 | `users`          | Tenant staff: `name`, globally unique `email`, `role` (`admin` / `staff`) | Yes          |
 | `refresh_tokens` | SHA-256 hashes of issued refresh tokens, with expiry and revocation       | Yes          |
-| `gift_cards`     | Card number, PIN, balance (`CHECK >= 0`), expiry date, status (`active` / `inactive` / `expired`) | Not yet |
-| `transactions`   | `redemption` / `refund` movements against a gift card                     | Not yet      |
-| `audit_logs`     | JSON (`jsonb`) action log per tenant/user                                 | Not yet      |
+| `gift_card_programs` | A tenant's gift card offerings: type (paid / promotional), currency, country/region, number prefix and length, PIN required, max value, expiry, staff daily limit | Yes |
+| `gift_cards`     | Encrypted card number and PIN, HMAC lookup hash, last 4 digits, reference number, balance, status | Yes |
+| `gift_card_transactions` | Append-only ledger: `issue`, `redeem`, `refund`, `void`, with idempotency keys | Yes |
+| `gift_card_deliveries` | Recipient, message, scheduled send time, delivery status, hashed link token | Yes |
+| `gift_card_key_checks` | Check values (not keys) that detect a wrong card key at startup | Internal |
+| `audit_logs`     | Append-only JSON (`jsonb`) log of sensitive actions per tenant/user, emails masked | Yes (written by the API) |
+
+The database enforces the important invariants itself: a card's tenant and currency must match its program's, a ledger row's must match its card's, balances can't go negative, and the ledger and audit log reject `UPDATE` and `DELETE`.
 
 ## Getting started
 
@@ -98,10 +111,16 @@ Both the app and `docker-compose.yml` read this file.
 | `DB_ADMIN_USERNAME`    | yes\*    | `DB_USERNAME`                | **Admin role** (schema owner), used only by migrations. Set both admin variables or neither (neither = use the app credentials). \*Required by Docker Compose, and must differ from `DB_USERNAME` |
 | `DB_ADMIN_PASSWORD`    | yes\*    | `DB_PASSWORD`                | Password for the admin role |
 | `JWT_SECRET`           | yes      | none                         | At least 32 characters. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
-| `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement |
+| `CARD_ENCRYPTION_KEY`  | yes      | none                         | Encrypts gift card numbers and PINs (AES-256-GCM). 64 hex characters: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. See [Card keys](#card-keys) |
+| `CARD_LOOKUP_KEY`      | yes      | none                         | Keyed hash (HMAC-SHA256) for finding cards by number. Same format, must differ from the encryption key |
+| `CARD_ENCRYPTION_KEY_ID` | no     | `1`                          | Integer 1–32767. Change only together with the key |
+| `CARD_LOOKUP_KEY_ID`   | no       | `1`                          | Integer 1–32767. Change only together with the key |
+| `GIFT_CARD_LINK_BASE_URL` | no*   | `http://localhost:3000/gift` | Where gift emails link to (the landing page); the token is appended as `#token=...`. *Required in production, and must be `https` |
+| `GIFT_CARD_DEV_PRINT_LINKS` | no  | `false`                      | `true` prints gift links to the console so you can open them by hand. Refused unless `NODE_ENV=development` |
+| `DB_LOGGING`           | no       | `false`                      | `true` logs every SQL statement with its parameters. Refused when `NODE_ENV=production` |
 | `CORS_ORIGIN`          | no*     | `*`                          | One origin, or a comma-separated list. *Required when `NODE_ENV=production` (set `*` explicitly to allow any origin) |
 | `TRUST_PROXY`          | no       | `false`                      | Set to `true` behind a reverse proxy / load balancer so rate limits use the real client IP (`X-Forwarded-For`). Leave `false` otherwise: clients could spoof their IP |
-| `CORS_METHODS`         | no       | `GET,POST,PUT,DELETE`        | Comma-separated |
+| `CORS_METHODS`         | no       | `GET,POST,PUT,PATCH,DELETE`  | Comma-separated |
 | `CORS_ALLOWED_HEADERS` | no       | `Content-Type,Authorization` | Comma-separated |
 
 The app refuses to start if anything is missing or invalid, and lists every problem at once.
@@ -119,7 +138,17 @@ DB_PASSWORD=change-me
 DB_ADMIN_USERNAME=gcm_owner
 DB_ADMIN_PASSWORD=change-me-too
 JWT_SECRET=<output of the command above>
+CARD_ENCRYPTION_KEY=<64 hex characters>
+CARD_LOOKUP_KEY=<a different 64 hex characters>
+GIFT_CARD_DEV_PRINT_LINKS=true
 ```
+
+#### Card keys
+
+- **Back up both card keys (e.g. in a secret manager) before the first start.** The first start records a check value for each key id. After that, starting with a different key under the same id fails with `CARD_ENCRYPTION_KEY does not match the key recorded for key id 1`. A lost encryption key means the stored card numbers and PINs can't be read again.
+- To use a new key, give it a new id (`CARD_..._KEY_ID`). Re-encrypting existing cards under a new key (rotation) isn't built yet.
+- **Key-check reset:** if a check value was recorded for a key you never used for real cards, delete its row from `gift_card_key_checks` as the admin role. The startup check refuses this situation if any card still uses that key id.
+- The published test and CI keys in this repo are refused when `NODE_ENV=production`.
 
 **Why two database users?** The API connects as the app role, which can only read and write rows. If the API is ever compromised, the attacker can't drop tables, create roles or reach other databases. Schema changes need the admin role, which only migrations use. In production, keep the admin credentials out of the API server's environment and use them only in the deploy step that runs migrations.
 
@@ -182,11 +211,57 @@ Rules:
 - Errors use `{ "error": "<message>" }` with `400` (validation), `401` (missing/invalid token or credentials), `403` (wrong role), `404`, `409` (duplicate), `429` (rate limit), `503` with `Retry-After` (a concurrent database conflict; safe to retry).
 - Password hashes are never returned (excluded from queries and stripped by response schemas).
 
+### Gift card endpoints
+
+All need a Bearer token except the reveal link. "Global" means the default 100 requests / minute per IP.
+
+| Method | Path | Role | Body | Notes |
+| ------ | ---- | ---- | ---- | ----- |
+| POST  | `/gift-card-programs` | admin | `{ name, cardType, currency, country, region?, cardNumberPrefix, cardNumberLength, pinRequired, maxValue, expiryMonths?, staffDailyIssueLimit? }` | `201` program |
+| GET   | `/gift-card-programs` | admin, staff | none | `200` the tenant's programs |
+| GET   | `/gift-card-programs/:id` | admin, staff | none | `200` program |
+| PATCH | `/gift-card-programs/:id` | admin | any non-empty subset of the fields, or `status: "retired"` | `409` (naming the fields) when changing currency, prefix, length or other fixed fields after the first card |
+| POST  | `/gift-cards` | admin, staff | `{ programId, amount, idempotencyKey, recipient: { name, email }, senderName, message?, sendAt? }` | `201 { card, delivery }`. Replay of the same request: `200` + `Idempotent-Replayed: true`. 60 / minute per user |
+| GET   | `/gift-cards/:id` | admin, staff | none | `200 { card, delivery }` |
+| GET   | `/gift-cards/by-reference/:reference` | admin, staff | none | Look up by the printed reference number |
+| GET   | `/gift-cards/:id/transactions` | admin, staff | none | Ledger rows, oldest first |
+| POST  | `/gift-cards/lookup` | admin, staff | `{ cardNumber, pin? }` | `200 { card }`. 30 / minute per user |
+| POST  | `/gift-cards/redeem` | admin, staff | `{ cardNumber, pin?, amount, idempotencyKey, externalReference? }` | `201 { transaction, card }`; replay `200`. 30 / minute per user |
+| POST  | `/gift-card-transactions/:id/refunds` | admin | `{ amount, idempotencyKey }` | Refund part or all of a redemption |
+| POST  | `/gift-cards/:id/suspend`, `/resume`, `/void`, `/unlock` | admin | none | `200 { card, delivery }`. Repeating an action that's already in effect returns `200` |
+| POST  | `/gift-cards/:id/resend` | admin, staff | `{ recipient?: { name?, email? } }` | New link, old one stops working. Only admins may change the recipient. 10 / minute per user |
+| POST  | `/gift-card-links/reveal` | public | `{ token }` | `200` card number, PIN, balance, sender and message. 30 / minute per IP, `Cache-Control: no-store` |
+
+Amounts are integers in the currency's minor unit (cents for CAD; KWD, BHD and OMR have 3 decimals). Responses include `currencyExponent` so clients can format them. Card numbers and PINs only ever appear in the reveal response; everywhere else a card shows `last4` and `referenceNumber`.
+
 ### Tokens
 
 - **Access token:** a JWT (HS256, signed with `JWT_SECRET`), valid for **15 minutes**, with claims `sub` (user UUID), `tid` (tenant UUID), `role` and `typ: "access"`. Send it as `Authorization: Bearer <token>`.
 - **Refresh token:** a random opaque string, valid for **7 days**. Only its SHA-256 hash is stored. Each refresh **rotates** it: the old one is revoked and a new pair is returned. Rotation is atomic: if issuing the new pair fails, the old token stays valid. Every revocation records a reason (`rotated`, `logout`, `reuse`, `evicted`). Presenting a token that was **rotated** more than **10 seconds** ago is treated as theft, and **all** of that user's refresh tokens are revoked, forcing a new login. Within those 10 seconds (two tabs or a client retry racing on the same token), or for a token revoked by logout or eviction, the request just gets `401`. A user can have at most **10** active refresh tokens (sessions). Logging in again revokes the oldest.
 - Access tokens can't be revoked early. After logout they stay valid until they expire (at most 15 minutes).
+
+## Gift cards
+
+Digital gift cards, sent to a recipient by email. The full design, including the review that led to it, is in [`docs/design/gift-cards.md`](docs/design/gift-cards.md).
+
+- **Programs.** Each tenant defines programs: paid or promotional, one currency, a country (ISO 3166-1, e.g. `CA`) and optional region (`CA-QC`). Currency, country, prefix, number length and card type are fixed once the program has issued a card. Programs are retired, never deleted.
+- **Card numbers.** 16–19 digits: the program prefix (4–6 digits starting with 7, 8 or 9, outside payment-card ranges), random digits from a cryptographic generator, and a Luhn check digit. Programs without a PIN must use 19 digits, so numbers are much harder to guess.
+- **PINs** are 6 random digits, when the program requires one.
+- **Storage.** Numbers and PINs are encrypted with AES-256-GCM, bound to their card and tenant so a ciphertext can't be copied to another row. Cards are found by an HMAC of the number under a separate key. Only the last 4 digits are stored in clear.
+- **States.** `active`, `suspended`, `depleted` (balance 0), `voided`, `expired`. Paid cards never expire. Only promotional cards can have an expiry (Canadian provinces ban expiry on paid gift cards). There are no fees.
+- **Ledger.** Every balance change is a ledger row; the ledger can't be edited. Redemptions can't overdraw a card, even when requests arrive at the same time.
+- **Idempotency.** Issue, redeem and refund take an `idempotencyKey` (16–64 characters). Retrying the same request returns the original result with `Idempotent-Replayed: true`. Reusing a key for a different request is `409`.
+- **PIN lockout.** 5 wrong PINs lock the card for 30 minutes; an admin can unlock it. An unknown number, a wrong or missing PIN, a locked card and another tenant's card all get the same `404 Invalid card number or PIN`.
+- **Staff limits.** Staff can issue paid cards only if an admin set a `staffDailyIssueLimit` on the program, and only up to that total per rolling 24 hours. Promotional cards, refunds, suspend, resume, void and unlock are admin only.
+- **Delivery.** Issuing a card schedules an email to the recipient (immediately or at `sendAt`, up to 365 days ahead). It carries a link with a random token, valid for 90 days; only its SHA-256 hash is stored. Opening the link reveals the card. Resending issues a new link and the old one stops working. Voiding a card cancels a pending email and disables its link. Sending is retried with backoff (5 attempts, 10 s timeout each) and is at least once: if a timed-out send actually arrived, the recipient may get a second email, and only the newest link works.
+- **Audit.** Program changes, issuing, state changes, lockouts and resends are written to `audit_logs`, in the same transaction as the change, with emails masked. Audit rows are kept indefinitely. Like the ledger, the table rejects `UPDATE` and `DELETE` for every role, so redacting a row needs a deliberate one-off migration run as the admin (owner) role.
+- **Logs** never contain card numbers, PINs, link tokens, full email addresses or SQL parameters. Database errors are logged as their code, constraint and table only.
+
+**Landing page (not in this repo).** `GIFT_CARD_LINK_BASE_URL` points at a page that must: remove the token from the address bar (`history.replaceState`), POST it to `/gift-card-links/reveal`, render every field with `textContent` (never `innerHTML`), use a strict Content Security Policy and no third-party scripts. Add its origin to `CORS_ORIGIN`.
+
+**Threat model.** The encryption protects card data if the database is read by someone who shouldn't: a leaked backup or replica, read-only SQL injection, logged SQL parameters. It doesn't protect against someone who can *write* to the database as the app role: they could already change balances. Protect the app-role database credentials as carefully as the card keys.
+
+**Trying it locally.** With `NODE_ENV=development` and `GIFT_CARD_DEV_PRINT_LINKS=true`, issuing a card prints its link to the console. Copy the `token` from it and POST it to `/gift-card-links/reveal` to see the card number and PIN, then redeem with them.
 
 ## Database migrations
 
@@ -207,6 +282,17 @@ Expired refresh tokens are deleted automatically for users who log in or refresh
 npm run tokens:purge          # ts-node
 npm run tokens:purge:prod     # compiled dist/ files
 ```
+
+Gift card emails are sent by a dispatcher. Issuing and resending try to send right away; run the dispatch script **every minute** (cron or a scheduled task) to send scheduled emails and retry failed ones:
+
+```bash
+npm run deliveries:dispatch          # ts-node
+npm run deliveries:dispatch:prod     # compiled dist/ files
+```
+
+It needs only the database settings and `GIFT_CARD_LINK_BASE_URL`, not the card keys or `JWT_SECRET`.
+
+**Deploy order.** Run migrations before starting a new version: the API checks the card keys against `gift_card_key_checks` at startup and refuses to start without that table. Note that `DB_LOGGING=true` now stops the API from starting in production, so unset it before deploying.
 
 To change the schema: edit the entity, run `migration:generate`, review the generated SQL, run `migration:run`, and commit the migration together with the code. Don't edit a migration that has already been applied anywhere that matters. Add a new one instead.
 
@@ -230,19 +316,23 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 30 unit tests, 62 integration tests and the migration drift check._
+_Last reviewed: 2026-11-13. All checks pass locally: lint, typecheck, build, 129 unit tests, 207 integration tests and the migration drift check._
 
 ### Known limitations
 
-- **No gift card features yet.** `gift_cards`, `transactions` and `audit_logs` exist in the schema only.
+- **Gift emails are only logged, not sent.** There's no email provider yet; the default sender logs the delivery id and recipient domain. Before adding one: per-tenant send caps (so the API can't be used to send unwanted email) and HTML-escaped templates.
+- **No card listing or search**, and no public balance check (recipients use their link). List endpoints will come with pagination.
+- **No key rotation.** A new key needs a new key id; re-encrypting existing cards isn't built.
+- **No reloads, no payment taking, no physical cards, single currency per card.** Expiry rules beyond "promotional only" (e.g. for GCC markets) need a per-country rules engine and a legal review per market.
+- **Card lookup timing.** An unknown card number answers slightly faster than a known one with a wrong PIN. The rate limits and the PIN lockout make this impractical to exploit, and it's an accepted residual.
 - **No subdomain routing.** Tenants have a `subdomain`, but requests aren't resolved by `Host` header yet. The tenant comes from the access token.
 - **Emails are unique across all tenants.** One person can't belong to two tenants with the same email, and a `409 Email already registered` on `POST /users` or `POST /tenants` reveals that an address exists in *some* tenant. Fixing this needs per-tenant emails and a tenant-aware login (e.g. by subdomain).
 - **Access tokens are stateless.** They stay valid for up to 15 minutes after logout or theft detection, and a demoted admin keeps admin rights until their access token expires. Role changes apply on the next refresh.
-- **Rate limits are per IP and in memory.** There is no per-account login throttling, and counters aren't shared between server instances. Set `TRUST_PROXY=true` behind a proxy, or every client shares one limit.
+- **Rate limits are in memory.** Limits are per IP (and per user for gift card issue, lookup, redeem and resend). There is no per-account login throttling, and counters aren't shared between server instances. Set `TRUST_PROXY=true` behind a proxy, or every client shares one limit.
 - `GET /users` has no pagination.
 - **A refresh retried more than 10 seconds after a lost response logs the user out everywhere.** For example, the server rotated the token but the response never reached a mobile client. That retry is indistinguishable from a stolen token being replayed, and this is the standard trade-off of refresh-token rotation with reuse detection. Clients should retry failed refreshes promptly (within 10 seconds) or send the user to log in again.
 - Request validation is strict: wrong types are rejected rather than coerced (a numeric `password` gets `400`). Future querystring or params schemas must parse numbers and booleans themselves.
-- **Gift card PINs are stored as plain text** in the schema. A 6-digit PIN can't simply be bcrypt-hashed (only a million combinations, so it's quick to brute-force offline). Decide on a keyed hash (HMAC with a server-side secret) or encryption when the gift card feature is built, before any real cards are stored.
+- Audit rows are kept indefinitely. Set a retention period with the privacy policy (e.g. Quebec's Law 25 limits how long personal data may be kept).
 
 ### Security notes
 
@@ -251,12 +341,13 @@ _Last reviewed: 2026-11-12. All checks pass locally: lint, typecheck, build, 30 
 
 ## Roadmap
 
-1. Gift cards: entities and endpoints to issue cards, check balances, redeem and refund, with transactional balance updates (`SELECT ... FOR UPDATE`) and a transaction history.
-2. Audit logging for sensitive actions.
+1. A real email provider for gift deliveries (with send caps and escaped templates), and the recipient landing page.
+2. Gift card listing and search with pagination; card key rotation.
 3. Subdomain-based tenant resolution and per-tenant settings.
 4. User management endpoints (update role, deactivate, reset password), with session-aware access tokens so role changes and logout take effect immediately.
 5. Per-tenant emails with tenant-aware login. Per-account login throttling and a shared rate-limit store (e.g. Redis) for multiple instances. Pagination for list endpoints.
-6. API documentation (OpenAPI via `@fastify/swagger`).
+6. Reloads, payment taking, and per-country gift card rules for GCC markets.
+7. API documentation (OpenAPI via `@fastify/swagger`).
 
 ## Author
 
