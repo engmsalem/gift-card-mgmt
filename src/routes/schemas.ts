@@ -142,3 +142,14 @@ export const giftCardRevealResponse = {
     message: { type: ["string", "null"] },
   },
 } as const;
+
+export const giftCardLookupResponse = {
+  type: "object",
+  properties: { card: giftCardResponse },
+} as const;
+
+// A redeem or refund: the ledger row it wrote (or replayed) and the card as it stands now
+export const giftCardTransactionResultResponse = {
+  type: "object",
+  properties: { transaction: giftCardTransactionResponse, card: giftCardResponse },
+} as const;

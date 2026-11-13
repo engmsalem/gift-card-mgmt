@@ -80,8 +80,10 @@ test("other Postgres errors are not treated as conflicts", async () => {
   await app.close();
 });
 
-test("Postgres deadlock and serialization failures map to 503 with Retry-After", async () => {
+test("Postgres deadlock, serialization and lock-timeout failures map to 503 with Retry-After", async () => {
   for (const error of [
+    Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" }),
+    Object.assign(new Error("query failed"), { driverError: { code: "55P03" } }),
     Object.assign(new Error("deadlock detected"), { code: "40P01" }),
     Object.assign(new Error("could not serialize access"), { code: "40001" }),
     Object.assign(new Error("query failed"), { driverError: { code: "40P01" } }),

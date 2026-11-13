@@ -18,6 +18,9 @@ import userRoutes from "./routes/userRoutes";
 import { verifyCardKeys } from "./services/cardKeyCheck";
 import { DeliveryDispatcher, GiftCardDeliverySender } from "./services/deliveryDispatcher";
 
+// A request that cannot get a card row lock within this long answers 503 instead of queueing
+const DEFAULT_LOCK_TIMEOUT_MS = 5000;
+
 export interface BuildAppOptions {
   config: Config;
   // Must already be initialized by the caller
@@ -26,6 +29,8 @@ export interface BuildAppOptions {
   giftCards?: {
     // Replaces the configured sender (tests inject a recording one); never set in production
     deliverySender?: GiftCardDeliverySender;
+    // Bounds redemption and refund waits on a card row; tests shorten or lengthen it
+    lockTimeoutMs?: number;
     sendTimeoutMs?: number;
   };
 }
@@ -91,7 +96,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       log: app.log,
       sendTimeoutMs: opts.giftCards?.sendTimeoutMs,
     });
-    await app.register(giftCardRoutes, { cardCrypto, dispatcher });
+    await app.register(giftCardRoutes, {
+      cardCrypto,
+      dispatcher,
+      lockTimeoutMs: opts.giftCards?.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
+    });
     await app.register(giftCardLinkRoutes, { cardCrypto, dispatcher });
 
     return app;

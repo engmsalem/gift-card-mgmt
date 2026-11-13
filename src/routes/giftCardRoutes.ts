@@ -1,4 +1,4 @@
-import { FastifyInstance, FastifyRequest } from "fastify";
+import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Role } from "../enums/roles";
 import type { CardCrypto } from "../gift-cards/card-crypto";
 import { requireRole } from "../plugins/jwt";
@@ -6,15 +6,26 @@ import type { DeliveryDispatcher } from "../services/deliveryDispatcher";
 import { DeliveryService, ResendInput } from "../services/deliveryService";
 import { CardWithDelivery, GiftCardService, IssueInput } from "../services/giftCardService";
 import {
+  CardAuthFailedError,
+  LookupInput,
+  RedemptionService,
+  RedeemInput,
+  RefundInput,
+  TransactionResult,
+} from "../services/redemptionService";
+import {
   errorResponse,
   giftCardDeliveryOnlyResponse,
+  giftCardLookupResponse,
   giftCardTransactionResponse,
+  giftCardTransactionResultResponse,
   giftCardWithDeliveryResponse,
 } from "./schemas";
 
 export interface GiftCardRoutesOptions {
   cardCrypto: CardCrypto;
   dispatcher: DeliveryDispatcher;
+  lockTimeoutMs: number;
 }
 
 // Shape only (B-3): the business rules (program state, amount cap, staff limit) live in
@@ -23,6 +34,9 @@ const NO_CONTROL_CHARS = "^[^\u0000-\u001f\u007f]+$";
 // A message may span lines (LF, CR) but holds no other control characters
 const MESSAGE_PATTERN = "^[^\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f]*$";
 const MAX_INT32 = 2147483647;
+const IDEMPOTENCY_KEY_PATTERN = "^[A-Za-z0-9_-]{16,64}$";
+const CARD_NUMBER_PATTERN = "^[0-9][0-9 -]{14,26}[0-9]$";
+const PIN_PATTERN = "^[0-9]{6}$";
 
 const idParams = {
   type: "object",
@@ -46,6 +60,7 @@ function perUser(max: number) {
 export default async function giftCardRoutes(fastify: FastifyInstance, opts: GiftCardRoutesOptions) {
   const service = new GiftCardService(fastify, opts.cardCrypto, opts.dispatcher);
   const deliveries = new DeliveryService(fastify, opts.cardCrypto, opts.dispatcher);
+  const redemptions = new RedemptionService(fastify, opts.cardCrypto, opts.lockTimeoutMs);
   const adminOnly = [fastify.authenticate, requireRole(Role.ADMIN)];
   const adminOrStaffHooks = () => [fastify.authenticate, requireRole(Role.ADMIN, Role.STAFF)];
   const adminOrStaff = adminOrStaffHooks();
@@ -67,7 +82,7 @@ export default async function giftCardRoutes(fastify: FastifyInstance, opts: Gif
           properties: {
             programId: { type: "string", format: "uuid" },
             amount: { type: "integer", minimum: 1, maximum: MAX_INT32 },
-            idempotencyKey: { type: "string", pattern: "^[A-Za-z0-9_-]{16,64}$" },
+            idempotencyKey: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
             recipient: {
               type: "object",
               required: ["name", "email"],
@@ -127,6 +142,102 @@ export default async function giftCardRoutes(fastify: FastifyInstance, opts: Gif
       },
     },
     async (request) => service.listTransactions(request.user.tenantId, request.params.id)
+  );
+
+  // Card authentication failures are logged per actor (design 7.11): the signed-in user, the tenant and
+  // the route, never the number, the PIN or the body. The response is the same 404 for every cause.
+  const withAuthFailureLog = async <T>(request: FastifyRequest, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof CardAuthFailedError) {
+        request.log.warn({
+          userId: request.user.id,
+          tenantId: request.user.tenantId,
+          route: request.routeOptions.url,
+          outcome: "card_auth_failed",
+        });
+      }
+      throw err;
+    }
+  };
+
+  const cardAuthProperties = {
+    cardNumber: { type: "string", pattern: CARD_NUMBER_PATTERN },
+    pin: { type: "string", pattern: PIN_PATTERN },
+  } as const;
+
+  fastify.post<{ Body: LookupInput }>(
+    "/gift-cards/lookup",
+    {
+      onRequest: adminOrStaffHooks(),
+      config: perUser(30),
+      schema: {
+        body: {
+          type: "object",
+          required: ["cardNumber"],
+          additionalProperties: false,
+          properties: cardAuthProperties,
+        },
+        response: { 200: giftCardLookupResponse, "4xx": errorResponse },
+      },
+    },
+    async (request) => withAuthFailureLog(request, () => redemptions.lookup(ctxOf(request), request.body))
+  );
+
+  const sendTransactionResult = (reply: FastifyReply, { replayed, transaction, card }: TransactionResult) => {
+    if (replayed) return reply.status(200).header("Idempotent-Replayed", "true").send({ transaction, card });
+    return reply.status(201).send({ transaction, card });
+  };
+
+  fastify.post<{ Body: RedeemInput }>(
+    "/gift-cards/redeem",
+    {
+      onRequest: adminOrStaffHooks(),
+      config: perUser(30),
+      schema: {
+        body: {
+          type: "object",
+          required: ["cardNumber", "amount", "idempotencyKey"],
+          additionalProperties: false,
+          properties: {
+            ...cardAuthProperties,
+            amount: { type: "integer", minimum: 1, maximum: MAX_INT32 },
+            idempotencyKey: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
+            externalReference: { type: "string", minLength: 1, maxLength: 64, pattern: NO_CONTROL_CHARS },
+          },
+        },
+        response: { 200: giftCardTransactionResultResponse, 201: giftCardTransactionResultResponse, "4xx": errorResponse },
+      },
+    },
+    async (request, reply) =>
+      sendTransactionResult(
+        reply,
+        await withAuthFailureLog(request, () => redemptions.redeem(ctxOf(request), request.body))
+      )
+  );
+
+  // Admin only; the amount is bounded by the redemption it refunds (checked in the service)
+  fastify.post<{ Params: { id: string }; Body: RefundInput }>(
+    "/gift-card-transactions/:id/refunds",
+    {
+      onRequest: adminOnly,
+      schema: {
+        params: idParams,
+        body: {
+          type: "object",
+          required: ["amount", "idempotencyKey"],
+          additionalProperties: false,
+          properties: {
+            amount: { type: "integer", minimum: 1, maximum: MAX_INT32 },
+            idempotencyKey: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
+          },
+        },
+        response: { 200: giftCardTransactionResultResponse, 201: giftCardTransactionResultResponse, "4xx": errorResponse },
+      },
+    },
+    async (request, reply) =>
+      sendTransactionResult(reply, await redemptions.refund(ctxOf(request), request.params.id, request.body))
   );
 
   // Admin state changes. Repeating one that already holds (suspend a suspended card, ...) is a 200.

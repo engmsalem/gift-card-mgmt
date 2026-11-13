@@ -96,7 +96,7 @@ export interface TransactionResponse {
   createdAt: Date;
 }
 
-const IDEMPOTENCY_CONSTRAINT = "gift_card_transactions_tenant_id_idempotency_key_key";
+export const IDEMPOTENCY_CONSTRAINT = "gift_card_transactions_tenant_id_idempotency_key_key";
 // A generated number or reference that lost a race against another issue; a retry draws new ones
 const GENERATION_CONSTRAINTS = ["gift_cards_card_number_hmac_key", "gift_cards_tenant_id_reference_number_key"];
 const MAX_ISSUE_ATTEMPTS = 3;
@@ -105,7 +105,7 @@ const MAX_SEND_AHEAD_DAYS = 365;
 
 // Every card column the API exposes, plus the flags computed from the DB clock. Never the number,
 // PIN, ciphertexts, HMAC or key ids.
-const CARD_COLUMNS = `c.id, c.program_id, c.reference_number, c.card_number_last4, c.currency,
+export const CARD_COLUMNS = `c.id, c.program_id, c.reference_number, c.card_number_last4, c.currency,
   c.initial_amount, c.balance, c.status, c.expires_at, c.created_at, c.updated_at,
   (c.pin_enc IS NOT NULL) AS has_pin,
   (c.pin_locked_until IS NOT NULL AND c.pin_locked_until > now()) AS pin_locked,
@@ -114,7 +114,7 @@ const CARD_COLUMNS = `c.id, c.program_id, c.reference_number, c.card_number_last
 const DELIVERY_COLUMNS = `id, recipient_name, recipient_email, sender_name, message, send_at, status,
   attempts, sent_at, opened_at, reveal_count, last_revealed_at`;
 
-interface CardRow {
+export interface CardRow {
   id: string;
   program_id: string;
   reference_number: string;
@@ -159,7 +159,7 @@ interface ProgramRow {
   status: ProgramStatus;
 }
 
-interface TransactionRow {
+export interface TransactionRow {
   id: string;
   gift_card_id: string;
   type: GiftCardTransactionType;
@@ -172,7 +172,7 @@ interface TransactionRow {
   created_at: Date;
 }
 
-function toCardResponse(r: CardRow): GiftCardResponse {
+export function toCardResponse(r: CardRow): GiftCardResponse {
   const exponent = currencyExponent(r.currency);
   // Unreachable: programs only accept supported currencies; fail loud rather than invent an exponent
   if (exponent === null) throw new Error("card has an unsupported currency");
@@ -222,7 +222,7 @@ export async function loadDelivery(em: EntityManager, tenantId: string, cardId: 
   return toDeliveryResponse(delivery);
 }
 
-function toTransactionResponse(r: TransactionRow): TransactionResponse {
+export function toTransactionResponse(r: TransactionRow): TransactionResponse {
   return {
     id: r.id,
     giftCardId: r.gift_card_id,
@@ -237,16 +237,16 @@ function toTransactionResponse(r: TransactionRow): TransactionResponse {
   };
 }
 
-function snapshot(r: CardRow): CardSnapshot {
+export function snapshot(r: CardRow): CardSnapshot {
   return { status: r.status, balance: r.balance, isExpired: r.is_expired };
 }
 
-function rejectionError(reason: Rejection): ConflictError {
+export function rejectionError(reason: Rejection): ConflictError {
   return new ConflictError(reason === "expired" ? "Card has expired" : "Card is not active");
 }
 
 /** Same idempotency key, different request. */
-function idempotencyConflict(): ConflictError {
+export function idempotencyConflict(): ConflictError {
   return new ConflictError("Idempotency key already used with a different request");
 }
 

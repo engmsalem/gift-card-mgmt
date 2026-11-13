@@ -5,12 +5,14 @@
 // so the DB name below is derived from the same value an entry point would see.
 import "dotenv/config";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { after, afterEach, before, beforeEach } from "node:test";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import type { DataSource } from "typeorm";
 import { BuildAppOptions, buildApp } from "../../src/app";
 import { Config, PUBLISHED_NON_SECRET_KEYS, loadConfig } from "../../src/config";
 import { createDataSource } from "../../src/data-source";
+import { CardCrypto } from "../../src/gift-cards/card-crypto";
 import { assertTestDatabase, resolveTestDatabase } from "../support/test-db";
 
 // Config is loaded when this module is imported, on purpose: the suite cannot run without these
@@ -227,4 +229,91 @@ export interface TenantDto {
   id: string;
   name: string;
   subdomain: string;
+}
+
+// ---------- gift card fixtures ----------
+
+export interface TenantActors {
+  signup: SignupResult;
+  staffId: string;
+  admin: { authorization: string };
+  staff: { authorization: string };
+}
+
+/** A tenant with its admin and one staff user, both signed in. */
+export async function setupTenantActors(app: FastifyInstance, subdomain: string, email: string): Promise<TenantActors> {
+  const signup = await signupTenant(app, subdomain, email);
+  const admin = bearer((await login(app, signup.email)).accessToken);
+  const staffEmail = `staff@${subdomain}.com`;
+  const created = await send(app, {
+    method: "POST",
+    url: "/users",
+    headers: admin,
+    payload: { name: "Sam", email: staffEmail, password: PASSWORD },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const staff = bearer((await login(app, staffEmail)).accessToken);
+  return { signup, staffId: created.json<UserDto>().id, admin, staff };
+}
+
+/** Creates a program (PIN-required paid CAD by default) and returns its id. */
+export async function createGiftCardProgram(
+  app: FastifyInstance,
+  headers: { authorization: string },
+  overrides: Record<string, unknown> = {}
+): Promise<string> {
+  const res = await send(app, {
+    method: "POST",
+    url: "/gift-card-programs",
+    headers,
+    payload: {
+      name: "Holiday",
+      cardType: "paid",
+      currency: "CAD",
+      country: "CA",
+      cardNumberPrefix: "7000",
+      cardNumberLength: 16,
+      pinRequired: true,
+      maxValue: 100000,
+      ...overrides,
+    },
+  });
+  assert.equal(res.statusCode, 201, res.body);
+  return res.json<{ id: string }>().id;
+}
+
+/** Issues a card and returns its id with the number and PIN decrypted from the database. */
+export async function issueGiftCard(
+  app: FastifyInstance,
+  headers: { authorization: string },
+  tenantId: string,
+  programId: string,
+  amount: number
+): Promise<{ id: string; number: string; pin: string | null }> {
+  const res = await send(app, {
+    method: "POST",
+    url: "/gift-cards",
+    headers,
+    payload: {
+      programId,
+      amount,
+      idempotencyKey: randomBytes(12).toString("hex"),
+      recipient: { name: "Rita Recipient", email: "rita@example.com" },
+      senderName: "Sam Sender",
+    },
+  });
+  assert.equal(res.statusCode, 201, res.body);
+  const id = res.json<{ card: { id: string } }>().card.id;
+  const config = loadTestConfig();
+  const crypto = new CardCrypto({ encryption: config.cardEncryptionKey, lookup: config.cardLookupKey });
+  const [row] = (await adminQuery(
+    `SELECT card_number_enc, pin_enc, encryption_key_id FROM gift_cards WHERE id = $1`,
+    [id]
+  )) as { card_number_enc: Buffer; pin_enc: Buffer | null; encryption_key_id: number }[];
+  const ids = { tenantId, cardId: id };
+  return {
+    id,
+    number: crypto.decrypt("number", ids, row.encryption_key_id, row.card_number_enc),
+    pin: row.pin_enc === null ? null : crypto.decrypt("pin", ids, row.encryption_key_id, row.pin_enc),
+  };
 }

@@ -5,6 +5,7 @@ import { AppError } from "../errors";
 const PG_UNIQUE_VIOLATION = "23505";
 const PG_SERIALIZATION_FAILURE = "40001";
 const PG_DEADLOCK_DETECTED = "40P01";
+const PG_LOCK_NOT_AVAILABLE = "55P03"; // lock_timeout expired
 
 // TypeORM's QueryFailedError copies the driver error's fields onto itself and also keeps
 // the original under `driverError`.
@@ -14,12 +15,13 @@ function isUniqueViolation(error: unknown): boolean {
   return e.code === PG_UNIQUE_VIOLATION || e.driverError?.code === PG_UNIQUE_VIOLATION;
 }
 
-// A transaction the database aborted because of a concurrent one; safe for the client to retry
+// A transaction the database aborted (or gave up waiting for a lock in) because of a concurrent
+// one; safe for the client to retry
 function isRetryableConflict(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const e = error as { code?: unknown; driverError?: { code?: unknown } };
   return [e.code, e.driverError?.code].some(
-    (code) => code === PG_DEADLOCK_DETECTED || code === PG_SERIALIZATION_FAILURE
+    (code) => code === PG_DEADLOCK_DETECTED || code === PG_SERIALIZATION_FAILURE || code === PG_LOCK_NOT_AVAILABLE
   );
 }
 
@@ -35,7 +37,7 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.status(409).send({ error: "Already exists" });
       }
 
-      // Backstop for concurrent-transaction aborts (deadlock, serialization failure)
+      // Concurrent-transaction aborts (deadlock, serialization failure) and lock timeouts
       if (isRetryableConflict(error)) {
         request.log.warn(error);
         return reply
