@@ -1,75 +1,93 @@
-// Integration helpers. Importing this module points the app at the test database
-// BEFORE any src/ module (and therefore src/config.ts) is loaded, so keep the
-// src imports below lazy (require) and never import src/ at the top of this file
-// or of an integration test file.
+// Integration helpers. Builds an explicit test config that points at the test database
+// (never the development one) and creates the data sources from it; process.env is not mutated.
 
 // Must stay the first import: loads .env (without overriding vars already set in the shell)
-// so the DB name below is derived from the same value src/config.ts would see.
+// so the DB name below is derived from the same value an entry point would see.
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach } from "node:test";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import type { DataSource } from "typeorm";
+import { buildApp } from "../../src/app";
+import { Config, loadConfig } from "../../src/config";
+import { createDataSource } from "../../src/data-source";
 import { assertTestDatabase, resolveTestDatabase } from "../support/test-db";
 
+// Config is loaded when this module is imported, on purpose: the suite cannot run without these
+// variables, and the ConfigError raised here names whichever ones are missing.
 const testDb = resolveTestDatabase(process.env);
 assertTestDatabase(testDb, process.env);
-process.env.DB_DATABASE = testDb;
 
-interface Loaded {
-  admin: DataSource;
-  app: DataSource;
-  buildApp: typeof import("../../src/app").buildApp;
+// The only variables taken from the environment (after dotenv): connection credentials and the
+// JWT secret. Everything else is fixed below so a shell with NODE_ENV=production, TRUST_PROXY=true
+// or CORS_ORIGIN set cannot change what the tests exercise.
+const ENV_PASSTHROUGH = [
+  "DB_HOST",
+  "DB_PORT",
+  "DB_USERNAME",
+  "DB_PASSWORD",
+  "DB_ADMIN_USERNAME",
+  "DB_ADMIN_PASSWORD",
+  "JWT_SECRET",
+] as const;
+
+/**
+ * Config for the test database. Hermetic: only ENV_PASSTHROUGH comes from process.env.
+ * `overrides` are extra env vars (e.g. CORS_ORIGIN) applied last; an `undefined` value removes a
+ * variable (including a passthrough one). DB_DATABASE is always the test database.
+ */
+export function loadTestConfig(overrides: Record<string, string | undefined> = {}): Readonly<Config> {
+  const fromEnv: Record<string, string | undefined> = {};
+  for (const name of ENV_PASSTHROUGH) fromEnv[name] = process.env[name];
+  return loadConfig({
+    ...fromEnv,
+    NODE_ENV: "test",
+    DB_LOGGING: "false",
+    TRUST_PROXY: "false",
+    ...overrides,
+    DB_DATABASE: testDb,
+  });
 }
 
-let loaded: Loaded | undefined;
+const testConfig = loadTestConfig();
+const admin: DataSource = createDataSource(testConfig, "admin");
+const appDataSource: DataSource = createDataSource(testConfig, "app");
 
-function load(): Loaded {
-  if (!loaded) {
-    // Lazy require on purpose: src/ must load only after DB_DATABASE is switched (see file header)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, see above
-    const migrationDs = require("../../src/migration-data-source") as typeof import("../../src/migration-data-source");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, see above
-    const appDs = require("../../src/data-source") as typeof import("../../src/data-source");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, see above
-    const appModule = require("../../src/app") as typeof import("../../src/app");
-    loaded = { admin: migrationDs.default, app: appDs.AppDataSource, buildApp: appModule.buildApp };
-  }
-  return loaded;
+/** The app-role data source (running as the least-privileged role). */
+export function getAppDataSource(): DataSource {
+  return appDataSource;
 }
 
 /** Connects both data sources and applies pending migrations as the admin role. */
 export async function setupDatabase(): Promise<void> {
-  const { admin, app } = load();
   assertTestDatabase(admin.options.database as string | undefined, process.env);
   if (!admin.isInitialized) await admin.initialize();
   await admin.runMigrations();
-  if (!app.isInitialized) await app.initialize();
+  if (!appDataSource.isInitialized) await appDataSource.initialize();
 }
 
 export async function teardownDatabase(): Promise<void> {
-  const { admin, app } = load();
-  if (app.isInitialized) await app.destroy();
+  if (appDataSource.isInitialized) await appDataSource.destroy();
   if (admin.isInitialized) await admin.destroy();
 }
 
-/** Builds the Fastify app on the (initialized) app data source, running as the app role. */
-export async function buildTestApp(): Promise<FastifyInstance> {
-  const { app, buildApp } = load();
-  if (!app.isInitialized) await setupDatabase();
-  return buildApp({ dataSource: app, logger: false });
+/**
+ * Builds the Fastify app on the (initialized) app data source, running as the app role.
+ * Pass a config (see loadTestConfig) to build it with different settings.
+ */
+export async function buildTestApp(config: Config = testConfig): Promise<FastifyInstance> {
+  if (!appDataSource.isInitialized) await setupDatabase();
+  return buildApp({ config, dataSource: appDataSource, logger: false });
 }
 
 /** Runs SQL as the admin role (fixtures and direct state changes). */
 export async function adminQuery(sql: string, params: unknown[] = []): Promise<unknown> {
-  const { admin } = load();
   if (!admin.isInitialized) await admin.initialize();
   return admin.query(sql, params);
 }
 
 /** Empties every table except the migrations table, using admin creds. */
 export async function resetDb(): Promise<void> {
-  const { admin } = load();
   if (!admin.isInitialized) await admin.initialize();
   // Belt and braces: check the database we are actually connected to, not the config
   const [{ db }]: { db: string }[] = await admin.query("SELECT current_database() AS db");

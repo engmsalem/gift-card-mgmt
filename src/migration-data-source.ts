@@ -1,10 +1,7 @@
-import { DataSource } from "typeorm";
-import { config } from "./config";
-import { baseOptions } from "./data-source";
+// Entry point for the TypeORM CLI (it needs a module whose default export is a DataSource).
+// Loads .env, connects as the schema-owning admin role. Nothing else may import this module.
+import "dotenv/config";
+import { loadDbConfig } from "./config";
+import { createDataSource } from "./data-source";
 
-// Used by the TypeORM CLI and the test helpers: connects as the schema-owning admin role.
-export default new DataSource({
-  ...baseOptions,
-  username: config.dbAdminUsername,
-  password: config.dbAdminPassword,
-});
+export default createDataSource(loadDbConfig(process.env), "admin");

@@ -1,32 +1,47 @@
+import "dotenv/config";
 import "reflect-metadata";
+import { buildApp } from "./app";
+import { loadConfig } from "./config";
+import { createDataSource } from "./data-source";
 
 async function main() {
-  // Loaded lazily: importing config validates the environment and may throw a ConfigError,
-  // which must be caught below rather than surface as an uncaught module-load exception.
-  const { config } = await import("./config");
-  const { AppDataSource } = await import("./data-source");
-  const { buildApp } = await import("./app");
+  // Throws a ConfigError on a bad environment; handled by the catch below
+  const config = loadConfig(process.env);
+  const dataSource = createDataSource(config, "app");
 
-  await AppDataSource.initialize();
+  await dataSource.initialize();
   console.log("Database connected");
 
-  const app = await buildApp({ dataSource: AppDataSource });
-
-  const shutdown = async (signal: string) => {
-    app.log.info(`${signal} received, shutting down`);
+  try {
+    // buildApp closes its own instance if registration fails
+    const app = await buildApp({ config, dataSource });
     try {
-      await app.close();
-      await AppDataSource.destroy();
-      process.exit(0);
+      await app.listen({ host: config.host, port: config.port });
     } catch (err) {
-      app.log.error(err);
-      process.exit(1);
+      await app.close().catch(() => undefined);
+      throw err;
     }
-  };
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
-  await app.listen({ host: config.host, port: config.port });
+    // Only once listening: before that, a signal should simply end the process
+    const shutdown = async (signal: string) => {
+      app.log.info(`${signal} received, shutting down`);
+      try {
+        await app.close();
+        await dataSource.destroy();
+        process.exit(0);
+      } catch (err) {
+        app.log.error(err);
+        process.exit(1);
+      }
+    };
+    process.once("SIGINT", () => void shutdown("SIGINT"));
+    process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  } catch (err) {
+    // Startup failed after the pool opened (e.g. port in use): release the pool so the
+    // process can exit, then let the handler below report the original error
+    await dataSource.destroy().catch(() => undefined);
+    throw err;
+  }
 }
 
 main().catch((err) => {

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { adminQuery, login, signupTenant, useTestApp } from "./helpers";
+import { purgeExpiredRefreshTokens } from "../../src/scripts/purge-refresh-tokens";
+import { adminQuery, getAppDataSource, login, signupTenant, useTestApp } from "./helpers";
 
 const getApp = useTestApp();
 
@@ -23,12 +24,7 @@ test("purgeExpiredRefreshTokens deletes expired rows (any user) and keeps the re
     [b.adminId]
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- must load after helpers switch DB_DATABASE
-  const { purgeExpiredRefreshTokens } = require("../../src/scripts/purge-refresh-tokens") as typeof import("../../src/scripts/purge-refresh-tokens");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- same
-  const { AppDataSource } = require("../../src/data-source") as typeof import("../../src/data-source");
-
-  assert.equal(await purgeExpiredRefreshTokens(AppDataSource), 2);
+  assert.equal(await purgeExpiredRefreshTokens(getAppDataSource()), 2);
 
   const rows = (await adminQuery(
     "SELECT user_id, revoked_at IS NOT NULL AS revoked FROM refresh_tokens ORDER BY created_at"
@@ -36,5 +32,5 @@ test("purgeExpiredRefreshTokens deletes expired rows (any user) and keeps the re
   assert.equal(rows.length, 2);
   assert.ok(rows.every((r) => r.user_id === a.adminId));
   assert.deepEqual(rows.map((r) => r.revoked), [false, true]);
-  assert.equal(await purgeExpiredRefreshTokens(AppDataSource), 0);
+  assert.equal(await purgeExpiredRefreshTokens(getAppDataSource()), 0);
 });
