@@ -63,6 +63,11 @@ export function getAppDataSource(): DataSource {
   return appDataSource;
 }
 
+/** The admin (schema owner) data source, for tests that must hold a transaction open (see test/support/lock-staging.ts). */
+export function getAdminDataSource(): DataSource {
+  return admin;
+}
+
 /** Connects both data sources and applies pending migrations as the admin role. */
 export async function setupDatabase(): Promise<void> {
   assertTestDatabase(admin.options.database as string | undefined, process.env);

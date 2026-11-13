@@ -3,12 +3,14 @@ import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { DataSource } from "typeorm";
 import type { Config } from "./config";
+import { CardCrypto } from "./gift-cards/card-crypto";
 import errorHandler from "./plugins/error-handler";
 import jwtPlugin from "./plugins/jwt";
 import rateLimit from "./plugins/rate-limit";
 import authRoutes from "./routes/authRoutes";
 import tenantRoutes from "./routes/tenantRoutes";
 import userRoutes from "./routes/userRoutes";
+import { verifyCardKeys } from "./services/cardKeyCheck";
 
 export interface BuildAppOptions {
   config: Config;
@@ -38,6 +40,15 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   try {
     // Expose the TypeORM DataSource to services as `fastify.db`
     app.decorate("db", opts.dataSource);
+
+    // Composition root for the card crypto. Startup refuses a card key that does not match the check
+    // value recorded for its id (this needs gift_card_key_checks: run the migrations first), before
+    // any route exists. The catch below closes the instance and rethrows.
+    const cardCrypto = new CardCrypto({
+      encryption: opts.config.cardEncryptionKey,
+      lookup: opts.config.cardLookupKey,
+    });
+    await verifyCardKeys(opts.dataSource, cardCrypto);
 
     // Register plugins in order
     await app.register(errorHandler); // Register error handler first
