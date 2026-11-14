@@ -24,6 +24,9 @@ const DEFAULT_LOCK_TIMEOUT_MS = 5000;
 // table; these paths remove the fields that carry row data and request values if one is logged whole.
 const REDACT_PATHS = ["err.detail", "err.where", "err.parameters", "err.query", "err.driverError"];
 
+// Response headers the API's clients need to read from a browser (not configurable)
+const CORS_EXPOSED_HEADERS = ["Idempotent-Replayed", "Retry-After"];
+
 // Merges the redaction into the logger options, including caller-supplied ones (tests pass a stream)
 function withRedaction(logger: boolean | object): boolean | object {
   if (logger === false) return false;
@@ -101,6 +104,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       origin: opts.config.corsOrigin,
       methods: opts.config.corsMethods,
       allowedHeaders: opts.config.corsAllowedHeaders,
+      exposedHeaders: CORS_EXPOSED_HEADERS,
     });
     await app.register(rateLimit);
     await app.register(jwtPlugin, { secret: opts.config.jwtSecret }); // Then authentication

@@ -322,8 +322,9 @@ export class GiftCardService {
     const prepared = { recipientEmail, requestHash, sendAt };
 
     const result = await this.issueWithRetries(ctx, input, prepared);
-    // A replay changes nothing, so there is nothing to send
-    if (result.replayed) return result;
+    // A replay creates nothing, but its delivery may be due (the first request's send failed and was
+    // backed off): the claim takes only a due `scheduled` or lease-expired `sending` row, so a sent,
+    // cancelled or future delivery is left alone
     await this.dispatcher.dispatch({ deliveryId: result.delivery.id });
     // Dispatch may have sent it (or failed, or left it scheduled for later): report the real status
     const delivery = await loadDelivery(this.app.db.manager, ctx.tenantId, result.card.id);
@@ -605,7 +606,8 @@ export class GiftCardService {
 
   /**
    * Voids the card from any status: a `void` ledger row for the remaining balance (only if above 0),
-   * balance 0, and the pending delivery cancelled with its token cleared. Voiding a voided card
+   * balance 0, and an unsent delivery (`scheduled`, `sending`) cancelled. Every delivery's token is
+   * cleared so its link stops working, but a `sent` or `failed` delivery keeps its status. Voiding a voided card
    * succeeds without a change.
    */
   async void(ctx: CallerContext, id: string): Promise<CardWithDelivery> {
@@ -628,9 +630,11 @@ export class GiftCardService {
           [id, ctx.tenantId]
         );
         await em.query(
-          `UPDATE gift_card_deliveries SET status = 'cancelled', claimed_at = NULL, token_hash = NULL,
-              token_expires_at = NULL, updated_at = now()
-            WHERE gift_card_id = $1 AND tenant_id = $2 AND status <> 'cancelled'`,
+          `UPDATE gift_card_deliveries
+              SET status = CASE WHEN status IN ('scheduled', 'sending') THEN 'cancelled' ELSE status END,
+                  claimed_at = NULL, token_hash = NULL, token_expires_at = NULL, updated_at = now()
+            WHERE gift_card_id = $1 AND tenant_id = $2
+              AND (status IN ('scheduled', 'sending') OR token_hash IS NOT NULL)`,
           [id, ctx.tenantId]
         );
         await writeAudit(em, ctx, {

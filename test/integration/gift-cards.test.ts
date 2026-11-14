@@ -959,7 +959,7 @@ test("a depleted card cannot be suspended", async () => {
   assert.deepEqual(res.json(), { error: "Card is not active" });
 });
 
-test("void writes the void ledger row for the remaining balance, cancels the delivery and clears its token", async () => {
+test("void writes the void ledger row for the remaining balance and clears the delivery token, keeping a sent delivery sent", async () => {
   const a = await setupTenant("acme", "ada@acme.com");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { amount: 4200 });
@@ -975,7 +975,7 @@ test("void writes the void ledger row for the remaining balance, cancels the del
   const body = res.json<CardWithDelivery>();
   assert.equal(body.card.status, "voided");
   assert.equal(body.card.balance, 0);
-  assert.equal(body.delivery.status, "cancelled");
+  assert.equal(body.delivery.status, "sent");
 
   assert.deepEqual(await ledger(card.id), [
     { type: "issue", amount: 4200, balance_after: 4200 },
@@ -991,7 +991,7 @@ test("void writes the void ledger row for the remaining balance, cancels the del
     `SELECT status, claimed_at, token_hash, token_expires_at FROM gift_card_deliveries WHERE id = $1`,
     [delivery.id]
   )) as { status: string; claimed_at: Date | null; token_hash: Buffer | null; token_expires_at: Date | null }[];
-  assert.deepEqual(d, { status: "cancelled", claimed_at: null, token_hash: null, token_expires_at: null });
+  assert.deepEqual(d, { status: "sent", claimed_at: null, token_hash: null, token_expires_at: null });
 
   // Repeating the void adds no ledger row and no audit row
   assert.equal((await action(a.admin, card.id, "void")).statusCode, 200);

@@ -347,3 +347,32 @@ test("loadDispatchConfig needs DB vars and the link URL, not card keys or API se
     "production"
   );
 });
+
+test("NODE_ENV accepts only development, test and production; unset or empty is development", () => {
+  const dispatchEnv = { DB_DATABASE: "gcm", DB_USERNAME: "app", DB_PASSWORD: "app-pass" };
+  assert.equal(loadConfig(validEnv).nodeEnv, "development");
+  assert.equal(loadConfig({ ...validEnv, NODE_ENV: "" }).nodeEnv, "development");
+  assert.equal(loadDispatchConfig(dispatchEnv).nodeEnv, "development");
+  assert.equal(loadServerConfig({ JWT_SECRET: "x".repeat(32) }).nodeEnv, "development");
+  for (const value of ["development", "test"]) {
+    assert.equal(loadConfig({ ...validEnv, NODE_ENV: value }).nodeEnv, value);
+    assert.equal(loadDispatchConfig({ ...dispatchEnv, NODE_ENV: value }).nodeEnv, value);
+  }
+  assert.equal(loadConfig({ ...prodEnv, CORS_ORIGIN: "https://app.example.com" }).nodeEnv, "production");
+
+  for (const value of ["Production", "prod", "staging", " production"]) {
+    const apiMessage = messageOf(() => loadConfig({ ...prodEnv, NODE_ENV: value }));
+    assert.match(apiMessage, /NODE_ENV must be one of development, test, production/, value);
+    assert.equal(apiMessage.match(/NODE_ENV must be/g)?.length, 1, "reported once");
+    assert.match(
+      messageOf(() => loadDispatchConfig({ ...dispatchEnv, NODE_ENV: value })),
+      /NODE_ENV must be one of development, test, production/,
+      value
+    );
+    assert.match(
+      messageOf(() => loadServerConfig({ JWT_SECRET: "x".repeat(32), NODE_ENV: value })),
+      /NODE_ENV must be one of/,
+      value
+    );
+  }
+});

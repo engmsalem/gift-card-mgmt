@@ -484,6 +484,58 @@ test("sender throws: backoff recorded, issue still 201, message with the token i
   assert.equal(backoff2.ok, true, "attempt 2 backs off 4 minutes");
 });
 
+test("a replayed issue retries a due delivery whose first send failed", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const payload = {
+    programId,
+    amount: 5000,
+    idempotencyKey: "replay-retry-key-0001",
+    recipient: { name: "Rita Recipient", email: "rita@example.com" },
+    senderName: "Sam Sender",
+    message: "Happy holidays",
+  };
+  const post = () => send(getApp(), { method: "POST", url: "/gift-cards", headers: a.admin, payload });
+
+  sender.behavior = "throw";
+  const first = await post();
+  assert.equal(first.statusCode, 201, first.body);
+  const { delivery } = first.json<CardWithDelivery>();
+  assert.equal(delivery.status, "scheduled");
+  assert.equal(sender.messages.length, 1);
+
+  sender.behavior = "send";
+  await makeDue(delivery.id);
+  const replay = await post();
+  assert.equal(replay.statusCode, 200, replay.body);
+  assert.equal(replay.headers["idempotent-replayed"], "true");
+  assert.equal(replay.json<CardWithDelivery>().delivery.status, "sent");
+  assert.equal(sender.messages.length, 2, "the failed attempt and the retry");
+  assert.equal((await deliveryRow(delivery.id)).status, "sent");
+  assert.equal((await reveal(sender.lastToken())).statusCode, 200);
+});
+
+test("a replayed issue of an already sent card sends nothing", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const payload = {
+    programId,
+    amount: 5000,
+    idempotencyKey: "replay-sent-key-0001",
+    recipient: { name: "Rita Recipient", email: "rita@example.com" },
+    senderName: "Sam Sender",
+  };
+  const post = () => send(getApp(), { method: "POST", url: "/gift-cards", headers: a.admin, payload });
+  assert.equal((await post()).statusCode, 201);
+  assert.equal(sender.messages.length, 1);
+
+  const replay = await post();
+  assert.equal(replay.statusCode, 200, replay.body);
+  assert.equal(replay.headers["idempotent-replayed"], "true");
+  assert.equal(replay.json<CardWithDelivery>().delivery.status, "sent");
+  assert.equal(sender.messages.length, 1);
+});
+
 test("the dispatcher logs only ids, the attempt and the error name", async () => {
   const a = await setupTenant("acme", "ada@acme.com");
   const programId = await createProgram(a.admin);
@@ -813,6 +865,33 @@ test("a voided card's link 404s", async () => {
   const res = await reveal(token);
   assert.equal(res.statusCode, 404);
   assert.deepEqual(res.json(), { error: "Link is invalid or has expired" });
+});
+
+test("void of a sent card keeps the delivery `sent`, clears the token, and the link stops working", async () => {
+  const a = await setupTenant("acme", "ada@acme.com");
+  const programId = await createProgram(a.admin);
+  const { card, delivery } = await issueOk(a.admin, programId);
+  const token = sender.lastToken();
+  const before = await deliveryRow(delivery.id);
+  assert.equal(before.status, "sent");
+  assert.ok(before.token_hash);
+
+  assert.equal((await voidCard(a.admin, card.id)).statusCode, 200);
+
+  const row = await deliveryRow(delivery.id);
+  assert.equal(row.status, "sent");
+  assert.deepEqual(row.sent_at, before.sent_at);
+  assert.equal(row.token_hash, null);
+  assert.equal(row.token_expires_at, null);
+  assert.equal(row.claimed_at, null);
+  const res = await reveal(token);
+  assert.equal(res.statusCode, 404);
+  assert.deepEqual(res.json(), { error: "Link is invalid or has expired" });
+
+  const got = await send(getApp(), { method: "GET", url: `/gift-cards/${card.id}`, headers: a.admin });
+  assert.equal(got.statusCode, 200, got.body);
+  assert.equal(got.json<CardWithDelivery & { card: { status: string } }>().delivery.status, "sent");
+  assert.equal(got.json<{ card: { status: string } }>().card.status, "voided");
 });
 
 // ---------- resend keeps the scheduled send date ----------

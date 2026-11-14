@@ -61,6 +61,8 @@ const CARD_KEY_BYTES = 32;
 const MIN_DISTINCT_KEY_BYTES = 16;
 const MAX_CARD_KEY_ID = 32767;
 const DEFAULT_GIFT_CARD_LINK_BASE_URL = "http://localhost:3000/gift";
+// Exact, lowercase. Production safeguards key off "production", so a typo must not fall through.
+const NODE_ENVS = ["development", "test", "production"] as const;
 
 const derivedKey = (label: string): string => createHash("sha256").update(label).digest("hex");
 
@@ -122,6 +124,17 @@ function createReader(env: Env, problems: string[]) {
 
 type Reader = ReturnType<typeof createReader>;
 
+/**
+ * NODE_ENV for every entry point. Unset or empty is "development"; any value outside NODE_ENVS
+ * is a problem (and reads as "development" so it does not add misleading follow-on problems).
+ */
+function readNodeEnv(env: Env, read: Reader): string {
+  const raw = read.str("NODE_ENV", "development");
+  if ((NODE_ENVS as readonly string[]).includes(raw)) return raw;
+  read.problem(`NODE_ENV must be one of ${NODE_ENVS.join(", ")} (got "${raw}")`);
+  return "development";
+}
+
 function readDbConfig(env: Env, read: Reader): DbConfig {
   const dbUsername = read.str("DB_USERNAME");
   const dbPassword = read.str("DB_PASSWORD");
@@ -150,9 +163,7 @@ function readDbConfig(env: Env, read: Reader): DbConfig {
   };
 }
 
-function readServerConfig(env: Env, read: Reader): ServerConfig {
-  const nodeEnv = read.str("NODE_ENV", "development");
-
+function readServerConfig(env: Env, read: Reader, nodeEnv: string): ServerConfig {
   // No silent wildcard in production: the operator has to choose the allowed origins
   if (nodeEnv === "production" && (env.CORS_ORIGIN === undefined || env.CORS_ORIGIN === "")) {
     read.problem('CORS_ORIGIN is required when NODE_ENV is "production" (use "*" to allow any origin)');
@@ -265,8 +276,7 @@ function readLinkConfig(
 }
 
 /** Gift card keys and delivery link settings. Not part of readServerConfig (see loadConfig). */
-function readGiftCardConfig(env: Env, read: Reader): GiftCardConfig {
-  const nodeEnv = read.str("NODE_ENV", "development");
+function readGiftCardConfig(env: Env, read: Reader, nodeEnv: string): GiftCardConfig {
   const production = nodeEnv === "production";
   const encryption = readCardKey(env, read, "CARD_ENCRYPTION_KEY", "CARD_ENCRYPTION_KEY_ID", production);
   const lookup = readCardKey(env, read, "CARD_LOOKUP_KEY", "CARD_LOOKUP_KEY_ID", production);
@@ -309,7 +319,8 @@ export function loadDbConfig(env: Env): Readonly<DbConfig> {
 /** HTTP server settings only. Collects every problem and throws once. */
 export function loadServerConfig(env: Env): Readonly<ServerConfig> {
   const problems: string[] = [];
-  const config = readServerConfig(env, createReader(env, problems));
+  const read = createReader(env, problems);
+  const config = readServerConfig(env, read, readNodeEnv(env, read));
   throwIfProblems(problems);
   return Object.freeze(config);
 }
@@ -321,10 +332,11 @@ export function loadServerConfig(env: Env): Readonly<ServerConfig> {
 export function loadConfig(env: Env): Readonly<Config> {
   const problems: string[] = [];
   const read = createReader(env, problems);
+  const nodeEnv = readNodeEnv(env, read);
   const config: Config = {
     ...readDbConfig(env, read),
-    ...readServerConfig(env, read),
-    ...readGiftCardConfig(env, read),
+    ...readServerConfig(env, read, nodeEnv),
+    ...readGiftCardConfig(env, read, nodeEnv),
   };
   checkDbLogging(read, config.dbLogging, config.nodeEnv);
   throwIfProblems(problems);
@@ -338,7 +350,7 @@ export function loadConfig(env: Env): Readonly<Config> {
 export function loadDispatchConfig(env: Env): Readonly<DispatchConfig> {
   const problems: string[] = [];
   const read = createReader(env, problems);
-  const nodeEnv = read.str("NODE_ENV", "development");
+  const nodeEnv = readNodeEnv(env, read);
   const config: DispatchConfig = { ...readDbConfig(env, read), ...readLinkConfig(env, read, nodeEnv), nodeEnv };
   checkDbLogging(read, config.dbLogging, nodeEnv);
   throwIfProblems(problems);
