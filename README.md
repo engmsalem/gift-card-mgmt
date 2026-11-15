@@ -179,6 +179,14 @@ After launch:
 10. GCC markets: per-country gift card rules, a legal review per market, 3-decimal currencies.
 11. On client demand: physical cards, a public balance check, cross-currency.
 
-## Author
+## Contributing
 
-Maintained by [@engmsalem](https://github.com/engmsalem).
+Issues and pull requests are welcome. Only maintainers can merge, and every change goes through a
+pull request with CI passing. New dependencies must use a permissive license (MIT, Apache-2.0,
+BSD, ISC or similar): no copyleft (GPL, LGPL, AGPL). By submitting a pull request you agree that
+your contribution is licensed under Apache-2.0.
+
+## License
+
+Copyright 2025–2026 [@engmsalem](https://github.com/engmsalem). Licensed under the
+[Apache License 2.0](LICENSE); see [NOTICE](NOTICE).
