@@ -176,21 +176,21 @@ test("redeem: a concurrent winner with the same request hash is replayed after r
   await adminQuery(`UPDATE gift_cards SET balance = 900 WHERE id = $1`, [card.id]);
 });
 
-test("PIN attempts are serialized: 5 queued wrong PINs lock the card, so the queued correct PIN fails (staged)", async () => {
+test("PIN attempts are serialized: 6 queued wrong PINs lock the card exactly once, then the correct PIN fails (staged)", async () => {
   const { actors, card } = await setup(1000);
   const wrong = card.pin === "123456" ? "654321" : "123456";
 
   const tx = await openAdminTransaction();
   try {
     await tx.query(`SELECT id FROM gift_cards WHERE id = $1 FOR UPDATE`, [card.id]);
-    // Stage one waiter at a time: the lock is granted in arrival order
+    // All six wait on the card lock. PostgreSQL doesn't promise to grant a row lock in arrival
+    // order once a waiter has updated the row, so the requests are identical and the assertions
+    // hold in any order: without serialization, attempts would be lost and the card never locks.
     const pending: Promise<LightMyRequestResponse>[] = [];
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 6; i++) {
       pending.push(redeem(actors.staff, card, 100, { pin: wrong }));
       await waitUntilBlocked(adminQuery, i);
     }
-    pending.push(redeem(actors.staff, card, 100));
-    await waitUntilBlocked(adminQuery, 6);
     await tx.commit();
 
     const responses = await Promise.all(pending);
@@ -201,6 +201,9 @@ test("PIN attempts are serialized: 5 queued wrong PINs lock the card, so the que
   } finally {
     await tx.rollback();
   }
+  const locked = await redeem(actors.staff, card, 100);
+  assert.equal(locked.statusCode, 404, "the correct PIN is refused while the card is locked");
+  assert.deepEqual(locked.json(), { error: "Invalid card number or PIN" });
   const row = await cardRow(card.id);
   assert.equal(row.balance, 1000);
   assert.equal(row.failed_pin_attempts, 0);
