@@ -175,7 +175,7 @@ function makeDispatcher(s: RecordingDeliverySender, log: DispatcherLog, sendTime
 // ---------- dispatch on issue ----------
 
 test("immediate delivery: sent on issue, the link carries the token in the fragment", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId);
 
@@ -216,7 +216,7 @@ test("immediate delivery: sent on issue, the link carries the token in the fragm
 });
 
 test("scheduled delivery is sent only after next_attempt_at", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const soon = new Date(Date.now() + 3600 * 1000).toISOString();
   const { delivery } = await issueOk(a.admin, programId, { sendAt: soon });
@@ -240,7 +240,7 @@ test("scheduled delivery is sent only after next_attempt_at", async () => {
 // ---------- reveal ----------
 
 test("reveal returns number, PIN and balance and counts the reveal", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { amount: 4200 });
 
@@ -289,7 +289,7 @@ test("reveal returns number, PIN and balance and counts the reveal", async () =>
 });
 
 test("reveal of a PIN-less program returns pin null", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { pinRequired: false, cardNumberLength: 19 });
   await issueOk(a.admin, programId);
   const res = await reveal(sender.lastToken());
@@ -298,7 +298,7 @@ test("reveal of a PIN-less program returns pin null", async () => {
 });
 
 test("reveal: an expired token, an unknown token and a malformed token", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId);
   const token = sender.lastToken();
@@ -330,7 +330,7 @@ test("reveal is limited to 30 per minute per IP", async () => {
 // ---------- resend ----------
 
 test("resend invalidates the old token; the new one works; audited", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId);
   const oldToken = sender.lastToken();
@@ -358,7 +358,7 @@ test("resend invalidates the old token; the new one works; audited", async () =>
 });
 
 test("resend with no body, and with a body that does not change the recipient, works for staff", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
 
@@ -369,7 +369,7 @@ test("resend with no body, and with a body that does not change the recipient, w
 });
 
 test("staff cannot change the recipient on a resend", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId);
   const token = sender.lastToken();
@@ -386,14 +386,14 @@ test("staff cannot change the recipient on a resend", async () => {
 });
 
 test("admin recipient change goes to the new address and audits masked emails only", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId);
 
-  const res = await resend(a.admin, card.id, { recipient: { name: "Bo New", email: "Bob.New@Other.org" } });
+  const res = await resend(a.admin, card.id, { recipient: { name: "Bo New", email: "Bob.New@Other.example" } });
   assert.equal(res.statusCode, 200, res.body);
-  assert.equal(res.json<{ delivery: DeliveryDto }>().delivery.recipientEmail, "bob.new@other.org");
-  assert.deepEqual(sender.messages[1].to, { name: "Bo New", email: "bob.new@other.org" });
+  assert.equal(res.json<{ delivery: DeliveryDto }>().delivery.recipientEmail, "bob.new@other.example");
+  assert.deepEqual(sender.messages[1].to, { name: "Bo New", email: "bob.new@other.example" });
 
   const [audit] = (await adminQuery(
     `SELECT details FROM audit_logs WHERE action = 'gift_card_delivery.resent'`
@@ -403,7 +403,7 @@ test("admin recipient change goes to the new address and audits masked emails on
     deliveryId: delivery.id,
     recipientChanged: true,
     previousRecipient: "r***@example.com",
-    newRecipient: "b***@other.org",
+    newRecipient: "b***@other.example",
   });
   assert.ok(!JSON.stringify(audit.details).includes("rita"));
   assert.ok(!JSON.stringify(audit.details).includes("bob.new"));
@@ -413,8 +413,8 @@ test("admin recipient change goes to the new address and audits masked emails on
 });
 
 test("resend: another tenant -> 404, rate limit 10/min per user", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
-  const b = await setupTenant("beta", "bea@beta.com");
+  const a = await setupTenant("acme", "ada@acme.example");
+  const b = await setupTenant("beta", "bea@beta.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
 
@@ -427,7 +427,7 @@ test("resend: another tenant -> 404, rate limit 10/min per user", async () => {
 });
 
 test("resend of a voided or expired card is 409, and nothing is sent", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card: voided } = await issueOk(a.admin, programId);
   const { card: expired } = await issueOk(a.admin, programId);
@@ -445,7 +445,7 @@ test("resend of a voided or expired card is 409, and nothing is sent", async () 
 // ---------- failure, backoff, timeout ----------
 
 test("sender throws: backoff recorded, issue still 201, message with the token is not recorded", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   sender.behavior = "throw";
   sender.failure = new Error("boom");
@@ -485,7 +485,7 @@ test("sender throws: backoff recorded, issue still 201, message with the token i
 });
 
 test("a replayed issue retries a due delivery whose first send failed", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const payload = {
     programId,
@@ -516,7 +516,7 @@ test("a replayed issue retries a due delivery whose first send failed", async ()
 });
 
 test("a replayed issue of an already sent card sends nothing", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const payload = {
     programId,
@@ -537,7 +537,7 @@ test("a replayed issue of an already sent card sends nothing", async () => {
 });
 
 test("the dispatcher logs only ids, the attempt and the error name", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);
@@ -563,7 +563,7 @@ test("the dispatcher logs only ids, the attempt and the error name", async () =>
 });
 
 test("a sender that never settles and ignores the signal: dispatch returns after sendTimeoutMs", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);
@@ -596,7 +596,7 @@ test("sendTimeoutMs is bounded", () => {
 });
 
 test("fifth failure: failed, token cleared, never claimed again", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   // Four attempts already failed; this claim is the fifth
@@ -622,7 +622,7 @@ test("fifth failure: failed, token cleared, never claimed again", async () => {
 // ---------- claim, lease, concurrency ----------
 
 test("a stale sending delivery is reclaimed with a new token; a fresh one is left alone", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   const oldHash = randomBytes(32);
@@ -648,7 +648,7 @@ test("a stale sending delivery is reclaimed with a new token; a fresh one is lef
 });
 
 test("a reclaimed sending delivery that used every attempt is failed, not sent", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await adminQuery(
@@ -671,7 +671,7 @@ test("a reclaimed sending delivery that used every attempt is failed, not sent",
 });
 
 test("a failed send on the last allowed attempt cannot overflow the backoff", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   // attempts is 99 after the claim: power(2, 99) would overflow an int without the cap
@@ -686,7 +686,7 @@ test("a failed send on the last allowed attempt cannot overflow the backoff", as
 });
 
 test("dispatch with a deliveryId opens exactly one claim transaction", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);
@@ -709,7 +709,7 @@ test("dispatch with a deliveryId opens exactly one claim transaction", async () 
 });
 
 test("two concurrent dispatches send each delivery once", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const ids: string[] = [];
   for (let i = 0; i < 4; i++) {
@@ -731,7 +731,7 @@ test("two concurrent dispatches send each delivery once", async () => {
 });
 
 test("dispatch honours limit and an explicit deliveryId", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const ids: string[] = [];
   for (let i = 0; i < 3; i++) {
@@ -750,7 +750,7 @@ test("dispatch honours limit and an explicit deliveryId", async () => {
 // ---------- voided and expired cards ----------
 
 test("void with a scheduled delivery: nothing is sent, the delivery is cancelled", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   assert.equal((await voidCard(a.admin, card.id)).statusCode, 200);
@@ -762,7 +762,7 @@ test("void with a scheduled delivery: nothing is sent, the delivery is cancelled
 });
 
 test("the claim cancels a pending delivery of a voided or expired card instead of sending", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const soon = () => new Date(Date.now() + 3600_000).toISOString();
   const { card: voided, delivery: dv } = await issueOk(a.admin, programId, { sendAt: soon() });
@@ -784,7 +784,7 @@ test("the claim cancels a pending delivery of a voided or expired card instead o
 });
 
 test("void during sending: the outcome is a no-op, no reclaim, the link 404s", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);
@@ -812,7 +812,7 @@ test("void during sending: the outcome is a no-op, no reclaim, the link 404s", a
 });
 
 test("resend during sending: the late outcome of the old send does not touch the new delivery state", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);
@@ -839,7 +839,7 @@ test("resend during sending: the late outcome of the old send does not touch the
 });
 
 test("resend and void concurrently: no deadlock; voided and cancelled", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   // Scheduled for later, so the delivery is `scheduled` whichever request wins: resend keeps the
   // send date and sends nothing, and void cancels it. (Issued for now, it would be `sent` and void
@@ -859,7 +859,7 @@ test("resend and void concurrently: no deadlock; voided and cancelled", async ()
 });
 
 test("a voided card's link 404s", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   const token = sender.lastToken();
@@ -871,7 +871,7 @@ test("a voided card's link 404s", async () => {
 });
 
 test("void of a sent card keeps the delivery `sent`, clears the token, and the link stops working", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId);
   const token = sender.lastToken();
@@ -900,7 +900,7 @@ test("void of a sent card keeps the delivery `sent`, clears the token, and the l
 // ---------- resend keeps the scheduled send date ----------
 
 test("resend of a delivery scheduled for later keeps send_at: still scheduled, nothing sent", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const sendAt = new Date(Date.now() + 30 * 24 * 3600_000).toISOString();
   const { card, delivery } = await issueOk(a.admin, programId, { sendAt });
@@ -932,7 +932,7 @@ test("resend of a delivery scheduled for later keeps send_at: still scheduled, n
 });
 
 test("resend of a sent delivery whose send date has passed sends immediately", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);
@@ -948,7 +948,7 @@ test("resend of a sent delivery whose send date has passed sends immediately", a
 // ---------- dispatch script path ----------
 
 test("dispatchAllDue: a sender failure is recorded for retry and does not reject", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
   await makeDue(delivery.id);

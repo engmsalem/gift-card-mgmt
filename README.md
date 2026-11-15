@@ -92,11 +92,11 @@ With `GIFT_CARD_DEV_PRINT_LINKS=true` in `.env`, gift links are printed to the a
 ```bash
 # Create a tenant and its first admin
 curl -X POST localhost:3000/tenants -H "Content-Type: application/json" \
-  -d '{"tenant":{"name":"Acme","subdomain":"acme"},"admin":{"name":"Ada","email":"ada@acme.com","password":"correct-horse"}}'
+  -d '{"tenant":{"name":"Acme","subdomain":"acme"},"admin":{"name":"Ada","email":"ada@acme.example","password":"correct-horse"}}'
 
 # Log in -> { accessToken, refreshToken, expiresIn }
 curl -X POST localhost:3000/auth/login -H "Content-Type: application/json" \
-  -d '{"email":"ada@acme.com","password":"correct-horse"}'
+  -d '{"email":"ada@acme.example","password":"correct-horse"}'
 
 # Create a program (amounts are in cents) -> { id, ... }
 curl -X POST localhost:3000/gift-card-programs -H "Authorization: Bearer <accessToken>" \

@@ -141,7 +141,7 @@ async function insertCard(tenantId: string, programId: string, userId: string, c
 // ---------- create ----------
 
 test("admin creates a program: 201, exact response shape, tenant from the token, audit row", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const res = await post(a.admin, validProgram);
   assert.equal(res.statusCode, 201, res.body);
   const program = res.json<ProgramDto>();
@@ -180,7 +180,7 @@ test("admin creates a program: 201, exact response shape, tenant from the token,
 });
 
 test("a KWD program reports currencyExponent 3; optional fields round-trip", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin, {
     name: "Kuwait promo",
     cardType: "promotional",
@@ -195,14 +195,14 @@ test("a KWD program reports currencyExponent 3; optional fields round-trip", asy
 });
 
 test("the tenant can not be chosen via the body", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
-  const other = await signupTenant(getApp(), "other", "owner@other.com");
+  const a = await setupTenant("acme", "ada@acme.example");
+  const other = await signupTenant(getApp(), "other", "owner@other.example");
   const res = await post(a.admin, { ...validProgram, tenantId: other.tenantId });
   assert.equal(res.statusCode, 400);
 });
 
 test("unknown body fields, missing fields and wrong types return 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   assert.equal((await post(a.admin, { ...validProgram, status: "retired" })).statusCode, 400);
   assert.equal((await post(a.admin, { ...validProgram, bogus: 1 })).statusCode, 400);
   const { maxValue: omitted, ...missing } = validProgram;
@@ -215,7 +215,7 @@ test("unknown body fields, missing fields and wrong types return 400", async () 
 });
 
 test("staff cannot create; unauthenticated is 401", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const res = await post(a.staff, validProgram);
   assert.equal(res.statusCode, 403);
   assert.deepEqual(res.json(), { error: "Insufficient permissions" });
@@ -225,8 +225,8 @@ test("staff cannot create; unauthenticated is 401", async () => {
 });
 
 test("program name is unique per tenant, but two tenants may share a name", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
-  const b = await setupTenant("other", "owner@other.com");
+  const a = await setupTenant("acme", "ada@acme.example");
+  const b = await setupTenant("other", "owner@other.example");
   await createProgram(a.admin);
   const dup = await post(a.admin, validProgram);
   assert.equal(dup.statusCode, 409);
@@ -235,7 +235,7 @@ test("program name is unique per tenant, but two tenants may share a name", asyn
 });
 
 test("network prefixes and prefixes outside 7-9 are rejected", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const bad = ["8100", "829", "81", "9792", "979200", "4000", "6011", "0123", "700", "7000000", "70a0"];
   for (const cardNumberPrefix of bad) {
     const res = await post(a.admin, { ...validProgram, cardNumberPrefix });
@@ -246,7 +246,7 @@ test("network prefixes and prefixes outside 7-9 are rejected", async () => {
 });
 
 test("a PIN-less program must have 19-digit numbers; card length is 16 to 19", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const bad = await post(a.admin, { ...validProgram, pinRequired: false, cardNumberLength: 16 });
   assert.equal(bad.statusCode, 400);
   assert.match(bad.json<{ error: string }>().error, /19/);
@@ -257,7 +257,7 @@ test("a PIN-less program must have 19-digit numbers; card length is 16 to 19", a
 });
 
 test("expiryMonths is for promotional programs only; staffDailyIssueLimit for paid only", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   assert.equal((await post(a.admin, { ...validProgram, expiryMonths: 6 })).statusCode, 400);
   const promoLimit = { ...validProgram, cardType: "promotional", staffDailyIssueLimit: 5000 };
   assert.equal((await post(a.admin, promoLimit)).statusCode, 400);
@@ -273,7 +273,7 @@ test("expiryMonths is for promotional programs only; staffDailyIssueLimit for pa
 });
 
 test("unsupported currency or country and a region from another country are rejected", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   assert.equal((await post(a.admin, { ...validProgram, currency: "EUR" })).statusCode, 400);
   assert.equal((await post(a.admin, { ...validProgram, country: "US" })).statusCode, 400);
   assert.equal((await post(a.admin, { ...validProgram, region: "US-NY" })).statusCode, 400);
@@ -288,7 +288,7 @@ test("unsupported currency or country and a region from another country are reje
 });
 
 test("a rejected create writes neither a program nor an audit row", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   await post(a.admin, { ...validProgram, cardNumberPrefix: "8100" });
   const rows = (await adminQuery(`SELECT count(*)::int AS n FROM gift_card_programs`)) as { n: number }[];
   assert.equal(rows[0].n, 0);
@@ -298,7 +298,7 @@ test("a rejected create writes neither a program nor an audit row", async () => 
 // ---------- read ----------
 
 test("admin and staff can list and get programs, in creation order", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const first = await createProgram(a.admin, { name: "First" });
   const second = await createProgram(a.admin, { name: "Second" });
 
@@ -316,7 +316,7 @@ test("admin and staff can list and get programs, in creation order", async () =>
 });
 
 test("GET requires authentication; an unknown id is 404 and a malformed id is 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   assert.equal((await send(getApp(), { method: "GET", url: "/gift-card-programs" })).statusCode, 401);
   const unknown = await send(getApp(), {
     method: "GET",
@@ -331,7 +331,7 @@ test("GET requires authentication; an unknown id is 404 and a malformed id is 40
 });
 
 test("hasIssuedCards turns true once a card exists", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const withCard = await createProgram(a.admin, { name: "With card" });
   const without = await createProgram(a.admin, { name: "Without card" });
   await insertCard(a.signup.tenantId, withCard.id, a.signup.adminId);
@@ -349,8 +349,8 @@ test("hasIssuedCards turns true once a card exists", async () => {
 // ---------- tenant isolation ----------
 
 test("another tenant's program is invisible: list, get and patch", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
-  const b = await setupTenant("other", "owner@other.com");
+  const a = await setupTenant("acme", "ada@acme.example");
+  const b = await setupTenant("other", "owner@other.example");
   const program = await createProgram(a.admin);
 
   const list = await send(getApp(), { method: "GET", url: "/gift-card-programs", headers: b.admin });
@@ -371,7 +371,7 @@ test("another tenant's program is invisible: list, get and patch", async () => {
 // ---------- update ----------
 
 test("patch: role checks, empty or no-op bodies and unknown fields", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin);
 
   assert.equal((await patch(a.staff, program.id, { name: "x" })).statusCode, 403);
@@ -390,7 +390,7 @@ test("patch: role checks, empty or no-op bodies and unknown fields", async () =>
 });
 
 test("before the first card every definition field is editable", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin);
 
   const res = await patch(a.admin, program.id, {
@@ -422,7 +422,7 @@ test("before the first card every definition field is editable", async () => {
 });
 
 test("a patch is validated as a whole: results that break a rule are 400 and change nothing", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin, { staffDailyIssueLimit: 100 });
 
   // a paid program cannot gain an expiry, and cannot become promotional while a staff limit is set
@@ -439,7 +439,7 @@ test("a patch is validated as a whole: results that break a rule are 400 and cha
 });
 
 test("each immutable field is rejected with 409 naming it once a card exists", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin, { region: "CA-ON" });
   await insertCard(a.signup.tenantId, program.id, a.signup.adminId);
 
@@ -486,14 +486,14 @@ test("each immutable field is rejected with 409 naming it once a card exists", a
 });
 
 test("an invalid value for an immutable field after a card exists is still a 409, not a 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin);
   await insertCard(a.signup.tenantId, program.id, a.signup.adminId);
   assert.equal((await patch(a.admin, program.id, { cardNumberPrefix: "8100" })).statusCode, 409);
 });
 
 test("mutable fields still change after a card exists; pinRequired and expiry apply to new cards only", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const paid = await createProgram(a.admin, { pinRequired: true, cardNumberLength: 19 });
   const promo = await createProgram(a.admin, { name: "Promo", cardType: "promotional", expiryMonths: 12 });
   await insertCard(a.signup.tenantId, paid.id, a.signup.adminId);
@@ -535,7 +535,7 @@ test("mutable fields still change after a card exists; pinRequired and expiry ap
 });
 
 test("a program can be retired and reactivated; status changes are audited", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin);
   const retired = await patch(a.admin, program.id, { status: "retired" });
   assert.equal(retired.statusCode, 200);
@@ -559,7 +559,7 @@ test("a program can be retired and reactivated; status changes are audited", asy
 });
 
 test("an update audit row records from and to for staffDailyIssueLimit, and only the changed fields", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const program = await createProgram(a.admin);
 
   assert.equal((await patch(a.admin, program.id, { staffDailyIssueLimit: 5000 })).statusCode, 200);
@@ -582,7 +582,7 @@ test("an update audit row records from and to for staffDailyIssueLimit, and only
 });
 
 test("renaming onto an existing name in the tenant is 409 and leaves no audit row", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   await createProgram(a.admin, { name: "One" });
   const two = await createProgram(a.admin, { name: "Two" });
   const res = await patch(a.admin, two.id, { name: "One" });

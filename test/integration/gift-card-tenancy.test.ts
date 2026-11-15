@@ -26,8 +26,8 @@ async function snapshot(): Promise<string> {
 
 test("another tenant's programs, cards, ledgers and transactions are 404 and nothing changes", async () => {
   const app = getApp();
-  const a = await setupTenantActors(app, "acme", "ada@acme.com");
-  const b = await setupTenantActors(app, "globex", "bob@globex.com");
+  const a = await setupTenantActors(app, "acme", "ada@acme.example");
+  const b = await setupTenantActors(app, "globex", "bob@globex.example");
 
   const programA = await createGiftCardProgram(app, a.admin);
   const cardA = await issueGiftCard(app, a.admin, a.signup.tenantId, programA, 10000);

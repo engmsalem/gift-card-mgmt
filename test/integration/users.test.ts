@@ -14,94 +14,94 @@ import {
 const getApp = useTestApp();
 
 test("admin creates a staff user in their own tenant", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const { accessToken } = await login(getApp(), s.email);
 
   const res = await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(accessToken),
-    payload: { name: "Sam", email: "Sam@Acme.com", password: PASSWORD },
+    payload: { name: "Sam", email: "Sam@Acme.example", password: PASSWORD },
   });
   assert.equal(res.statusCode, 201);
   const user = res.json<UserDto>();
   assert.equal(user.role, "staff");
-  assert.equal(user.email, "sam@acme.com");
+  assert.equal(user.email, "sam@acme.example");
   assert.equal(user.tenantId, s.tenantId);
   assert.match(user.id, UUID_V7);
   assert.match(user.tenantId, UUID_V7);
 
   // the invited user can log in
-  const staff = await login(getApp(), "sam@acme.com");
+  const staff = await login(getApp(), "sam@acme.example");
   assert.ok(staff.accessToken);
 });
 
 test("admin can create another admin", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const { accessToken } = await login(getApp(), s.email);
   const res = await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(accessToken),
-    payload: { name: "Bo", email: "bo@acme.com", password: PASSWORD, role: "admin" },
+    payload: { name: "Bo", email: "bo@acme.example", password: PASSWORD, role: "admin" },
   });
   assert.equal(res.statusCode, 201);
   assert.equal(res.json<UserDto>().role, "admin");
 });
 
 test("the tenant can not be chosen via the body", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
-  const other = await signupTenant(getApp(), "other", "owner@other.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
+  const other = await signupTenant(getApp(), "other", "owner@other.example");
   const { accessToken } = await login(getApp(), s.email);
   const res = await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(accessToken),
-    payload: { name: "Sam", email: "sam@acme.com", password: PASSWORD, tenantId: other.tenantId },
+    payload: { name: "Sam", email: "sam@acme.example", password: PASSWORD, tenantId: other.tenantId },
   });
   assert.equal(res.statusCode, 400);
 });
 
 test("creating a user with an existing email returns 409", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const { accessToken } = await login(getApp(), s.email);
   const res = await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(accessToken),
-    payload: { name: "Dup", email: "ADA@acme.com", password: PASSWORD },
+    payload: { name: "Dup", email: "ADA@acme.example", password: PASSWORD },
   });
   assert.equal(res.statusCode, 409);
 });
 
 test("invalid role returns 400", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const { accessToken } = await login(getApp(), s.email);
   const res = await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(accessToken),
-    payload: { name: "X", email: "x@acme.com", password: PASSWORD, role: "superuser" },
+    payload: { name: "X", email: "x@acme.example", password: PASSWORD, role: "superuser" },
   });
   assert.equal(res.statusCode, 400);
 });
 
 test("staff can not create or list users (403) but can read their profile", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const admin = await login(getApp(), s.email);
   await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(admin.accessToken),
-    payload: { name: "Sam", email: "sam@acme.com", password: PASSWORD },
+    payload: { name: "Sam", email: "sam@acme.example", password: PASSWORD },
   });
-  const staff = await login(getApp(), "sam@acme.com");
+  const staff = await login(getApp(), "sam@acme.example");
 
   const create = await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(staff.accessToken),
-    payload: { name: "Eve", email: "eve@acme.com", password: PASSWORD },
+    payload: { name: "Eve", email: "eve@acme.example", password: PASSWORD },
   });
   assert.equal(create.statusCode, 403);
 
@@ -122,8 +122,8 @@ test("staff can not create or list users (403) but can read their profile", asyn
 });
 
 test("GET /users lists only the caller's tenant, ordered by creation time", async () => {
-  const a = await signupTenant(getApp(), "acme", "ada@acme.com");
-  const b = await signupTenant(getApp(), "bravo", "bea@bravo.com");
+  const a = await signupTenant(getApp(), "acme", "ada@acme.example");
+  const b = await signupTenant(getApp(), "bravo", "bea@bravo.example");
   const adminA = await login(getApp(), a.email);
   const adminB = await login(getApp(), b.email);
 
@@ -131,13 +131,13 @@ test("GET /users lists only the caller's tenant, ordered by creation time", asyn
     method: "POST",
     url: "/users",
     headers: bearer(adminA.accessToken),
-    payload: { name: "A2", email: "a2@acme.com", password: PASSWORD },
+    payload: { name: "A2", email: "a2@acme.example", password: PASSWORD },
   });
   await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(adminB.accessToken),
-    payload: { name: "B2", email: "b2@bravo.com", password: PASSWORD },
+    payload: { name: "B2", email: "b2@bravo.example", password: PASSWORD },
   });
 
   const listA = await send(getApp(), {
@@ -153,11 +153,11 @@ test("GET /users lists only the caller's tenant, ordered by creation time", asyn
   assert.equal(listA.statusCode, 200);
   assert.deepEqual(
     listA.json<UserDto[]>().map((u) => u.email),
-    ["ada@acme.com", "a2@acme.com"]
+    ["ada@acme.example", "a2@acme.example"]
   );
   assert.deepEqual(
     listB.json<UserDto[]>().map((u) => u.email),
-    ["bea@bravo.com", "b2@bravo.com"]
+    ["bea@bravo.example", "b2@bravo.example"]
   );
   // UUIDv7 ids are time-ordered, so creation order is also id order
   const ids = listA.json<UserDto[]>().map((u) => u.id);
@@ -165,8 +165,8 @@ test("GET /users lists only the caller's tenant, ordered by creation time", asyn
 });
 
 test("a token can not reach another tenant's user", async () => {
-  const a = await signupTenant(getApp(), "acme", "ada@acme.com");
-  const b = await signupTenant(getApp(), "bravo", "bea@bravo.com");
+  const a = await signupTenant(getApp(), "acme", "ada@acme.example");
+  const b = await signupTenant(getApp(), "bravo", "bea@bravo.example");
 
   // Each admin sees only their own profile
   const adminB = await login(getApp(), b.email);
@@ -193,19 +193,19 @@ test("a token can not reach another tenant's user", async () => {
     method: "POST",
     url: "/users",
     headers: bearer(adminB.accessToken),
-    payload: { name: "B2", email: "b2@bravo.com", password: PASSWORD },
+    payload: { name: "B2", email: "b2@bravo.example", password: PASSWORD },
   });
   const adminA = await login(getApp(), a.email);
   const listA = await send(getApp(), { method: "GET", url: "/users", headers: bearer(adminA.accessToken) });
-  assert.deepEqual(listA.json<UserDto[]>().map((u) => u.email), ["ada@acme.com"]);
+  assert.deepEqual(listA.json<UserDto[]>().map((u) => u.email), ["ada@acme.example"]);
 });
 
 test("wrong-typed body fields are rejected, not coerced", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const { accessToken } = await login(getApp(), s.email);
-  const base = { name: "Sam", email: "sam@acme.com", password: PASSWORD };
+  const base = { name: "Sam", email: "sam@acme.example", password: PASSWORD };
 
-  for (const override of [{ password: 12345678 }, { email: ["sam@acme.com"] }]) {
+  for (const override of [{ password: 12345678 }, { email: ["sam@acme.example"] }]) {
     const res = await send(getApp(), {
       method: "POST",
       url: "/users",
@@ -217,15 +217,15 @@ test("wrong-typed body fields are rejected, not coerced", async () => {
 });
 
 test("authentication and role checks run before body validation", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const admin = await login(getApp(), s.email);
   await send(getApp(), {
     method: "POST",
     url: "/users",
     headers: bearer(admin.accessToken),
-    payload: { name: "Sam", email: "sam@acme.com", password: PASSWORD },
+    payload: { name: "Sam", email: "sam@acme.example", password: PASSWORD },
   });
-  const staff = await login(getApp(), "sam@acme.com");
+  const staff = await login(getApp(), "sam@acme.example");
   const invalid = { name: "" };
 
   const anonymous = await send(getApp(), { method: "POST", url: "/users", payload: invalid });

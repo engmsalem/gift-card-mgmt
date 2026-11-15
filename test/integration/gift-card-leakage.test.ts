@@ -113,7 +113,7 @@ test("no log line or non-reveal response carries a card number, PIN, token, link
       return res;
     };
 
-    const actors = await setupTenantActors(app, "acme", "ada@acme.com");
+    const actors = await setupTenantActors(app, "acme", "ada@acme.example");
     const tenantId = actors.signup.tenantId;
     const programId = await createGiftCardProgram(app, actors.admin);
 

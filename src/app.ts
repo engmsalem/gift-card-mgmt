@@ -56,7 +56,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // Fastify defaults to removeAdditional: true, which silently drops unknown body fields;
     // we want additionalProperties: false to reject them with a 400.
     // Fastify also defaults to coerceTypes: "array" (a number becomes a string, a one-element
-    // array becomes its element), which would let `password: 12345678` or `email: ["a@b.com"]`
+    // array becomes its element), which would let `password: 12345678` or `email: ["a@b.example"]`
     // through to the services; we want a wrong type to be a 400. There are no querystring or
     // params schemas today; a future one must declare explicit types (e.g. integer) and parse
     // them itself, since nothing is coerced to them any more.

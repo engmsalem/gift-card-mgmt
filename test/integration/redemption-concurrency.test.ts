@@ -40,7 +40,7 @@ function redeem(headers: Headers, card: Card, amount: number, overrides: Record<
 }
 
 async function setup(amount: number) {
-  const actors = await setupTenantActors(getApp(), "acme", "ada@acme.com");
+  const actors = await setupTenantActors(getApp(), "acme", "ada@acme.example");
   const programId = await createGiftCardProgram(getApp(), actors.admin);
   const card = await issueGiftCard(getApp(), actors.admin, actors.signup.tenantId, programId, amount);
   return { actors, programId, card };

@@ -19,7 +19,7 @@ const getApp = useTestApp();
 function signupPayload(overrides: { tenant?: object; admin?: object } = {}) {
   return {
     tenant: { name: "Acme", subdomain: "acme", ...overrides.tenant },
-    admin: { name: "Ada", email: "ada@acme.com", password: PASSWORD, ...overrides.admin },
+    admin: { name: "Ada", email: "ada@acme.example", password: PASSWORD, ...overrides.admin },
   };
 }
 
@@ -28,7 +28,7 @@ test("signup creates a tenant and its first admin", async () => {
   assert.equal(res.statusCode, 201);
   const body = res.json<{ tenant: TenantDto; user: UserDto }>();
   assert.equal(body.tenant.subdomain, "acme");
-  assert.equal(body.user.email, "ada@acme.com");
+  assert.equal(body.user.email, "ada@acme.example");
   assert.equal(body.user.role, "admin");
   assert.equal(body.user.tenantId, body.tenant.id);
   assert.match(body.user.id, UUID_V7);
@@ -40,29 +40,29 @@ test("signup trims and lowercases the email", async () => {
   const res = await send(getApp(), {
     method: "POST",
     url: "/tenants",
-    payload: signupPayload({ admin: { email: "  Ada@Acme.COM " } }),
+    payload: signupPayload({ admin: { email: "  Ada@Acme.EXAMPLE " } }),
   });
   assert.equal(res.statusCode, 201);
-  assert.equal(res.json<{ user: UserDto }>().user.email, "ada@acme.com");
+  assert.equal(res.json<{ user: UserDto }>().user.email, "ada@acme.example");
 });
 
 test("duplicate subdomain returns 409", async () => {
-  await signupTenant(getApp(), "acme", "one@x.com");
+  await signupTenant(getApp(), "acme", "one@x.example");
   const res = await send(getApp(), {
     method: "POST",
     url: "/tenants",
-    payload: signupPayload({ admin: { email: "two@x.com" } }),
+    payload: signupPayload({ admin: { email: "two@x.example" } }),
   });
   assert.equal(res.statusCode, 409);
   assert.deepEqual(res.json(), { error: "Subdomain already taken" });
 });
 
 test("duplicate email returns 409, case-insensitively, and creates no tenant", async () => {
-  await signupTenant(getApp(), "first", "a@x.com");
+  await signupTenant(getApp(), "first", "a@x.example");
   const res = await send(getApp(), {
     method: "POST",
     url: "/tenants",
-    payload: signupPayload({ tenant: { subdomain: "second" }, admin: { email: "A@x.com" } }),
+    payload: signupPayload({ tenant: { subdomain: "second" }, admin: { email: "A@x.example" } }),
   });
   assert.equal(res.statusCode, 409);
   assert.deepEqual(res.json(), { error: "Email already registered" });
@@ -147,7 +147,7 @@ test("a long but valid email is accepted for signup and for inviting a user", as
 });
 
 test("an email of 255 characters returns 400", async () => {
-  const email = `${"a".repeat(255 - "@x.com".length)}@x.com`;
+  const email = `${"a".repeat(255 - "@x.example".length)}@x.example`;
   assert.equal(email.length, 255);
   const res = await send(getApp(), {
     method: "POST",
@@ -158,25 +158,25 @@ test("an email of 255 characters returns 400", async () => {
 });
 
 test("a signup that conflicts does not run bcrypt", async () => {
-  await signupTenant(getApp(), "acme", "one@x.com");
+  await signupTenant(getApp(), "acme", "one@x.example");
   const hash = mock.method(bcrypt, "hash");
   try {
     const bySubdomain = await send(getApp(), {
       method: "POST",
       url: "/tenants",
-      payload: signupPayload({ admin: { email: "two@x.com" } }),
+      payload: signupPayload({ admin: { email: "two@x.example" } }),
     });
     const byEmail = await send(getApp(), {
       method: "POST",
       url: "/tenants",
-      payload: signupPayload({ tenant: { subdomain: "other" }, admin: { email: "one@x.com" } }),
+      payload: signupPayload({ tenant: { subdomain: "other" }, admin: { email: "one@x.example" } }),
     });
     assert.equal(bySubdomain.statusCode, 409);
     assert.equal(byEmail.statusCode, 409);
     assert.equal(hash.mock.callCount(), 0);
 
     // Control: the spy does see a successful signup
-    await signupTenant(getApp(), "third", "three@x.com");
+    await signupTenant(getApp(), "third", "three@x.example");
     assert.equal(hash.mock.callCount(), 1);
   } finally {
     hash.mock.restore();
@@ -189,7 +189,7 @@ test("signup is rate limited to 5 per minute", async () => {
     const res = await send(getApp(), {
       method: "POST",
       url: "/tenants",
-      payload: signupPayload({ tenant: { subdomain: `t${i}x` }, admin: { email: `u${i}@x.com` } }),
+      payload: signupPayload({ tenant: { subdomain: `t${i}x` }, admin: { email: `u${i}@x.example` } }),
     });
     statuses.push(res.statusCode);
   }

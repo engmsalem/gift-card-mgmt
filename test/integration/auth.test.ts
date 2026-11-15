@@ -20,7 +20,7 @@ import {
 const getApp = useTestApp();
 
 test("login returns an access/refresh pair", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
   assert.equal(tokens.expiresIn, 900);
   assert.match(tokens.refreshToken, /^[A-Za-z0-9_-]{43}$/);
@@ -34,13 +34,13 @@ test("login returns an access/refresh pair", async () => {
 });
 
 test("login normalizes the email", async () => {
-  await signupTenant(getApp(), "acme", "ada@acme.com");
-  const tokens = await login(getApp(), "  ADA@acme.com ");
+  await signupTenant(getApp(), "acme", "ada@acme.example");
+  const tokens = await login(getApp(), "  ADA@acme.example ");
   assert.ok(tokens.accessToken);
 });
 
 test("refresh tokens are stored hashed, never raw", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
   const rows = (await adminQuery("SELECT token_hash FROM refresh_tokens")) as {
     token_hash: string;
@@ -51,7 +51,7 @@ test("refresh tokens are stored hashed, never raw", async () => {
 });
 
 test("wrong password and unknown email give the identical 401", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const wrong = await send(getApp(), {
     method: "POST",
     url: "/auth/login",
@@ -60,7 +60,7 @@ test("wrong password and unknown email give the identical 401", async () => {
   const unknown = await send(getApp(), {
     method: "POST",
     url: "/auth/login",
-    payload: { email: "nobody@acme.com", password: PASSWORD },
+    payload: { email: "nobody@acme.example", password: PASSWORD },
   });
   assert.equal(wrong.statusCode, 401);
   assert.equal(unknown.statusCode, 401);
@@ -74,7 +74,7 @@ test("login is rate limited to 10 per minute", async () => {
     const res = await send(getApp(), {
       method: "POST",
       url: "/auth/login",
-      payload: { email: "nobody@acme.com", password: "x" },
+      payload: { email: "nobody@acme.example", password: "x" },
     });
     last = res.statusCode;
   }
@@ -82,7 +82,7 @@ test("login is rate limited to 10 per minute", async () => {
 });
 
 test("access token authenticates GET /users/me", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
   const res = await send(getApp(), {
     method: "GET",
@@ -109,7 +109,7 @@ test("garbage token returns 401", async () => {
 });
 
 test("a refresh token sent as Bearer returns 401", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
   const res = await send(getApp(), {
     method: "GET",
@@ -120,7 +120,7 @@ test("a refresh token sent as Bearer returns 401", async () => {
 });
 
 test("a validly signed JWT with typ refresh or without typ returns 401", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const claims = { sub: s.adminId, tid: s.tenantId, role: "admin" };
   for (const extra of [{ typ: "refresh" }, {}]) {
     const token = getApp().jwt.sign({ ...claims, ...extra } as never);
@@ -130,7 +130,7 @@ test("a validly signed JWT with typ refresh or without typ returns 401", async (
 });
 
 test("a JWT signed with another secret returns 401", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const other = Fastify();
   await other.register(fastifyJwt, {
     secret: "a-completely-different-secret-of-sufficient-length",
@@ -148,7 +148,7 @@ test("a JWT signed with another secret returns 401", async () => {
 });
 
 test("refresh rotates: new pair works, old token is rejected", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const first = await login(getApp(), s.email);
 
   const res = await send(getApp(), {
@@ -174,7 +174,7 @@ async function refreshWith(refreshToken: string) {
 }
 
 test("a rotated token presented again right away is rejected without revoking the newer pair", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const first = await login(getApp(), s.email);
   const rotated = (await refreshWith(first.refreshToken)).json<Tokens>();
 
@@ -191,7 +191,7 @@ test("a rotated token presented again right away is rejected without revoking th
 });
 
 test("reusing a rotated refresh token after the grace window is rejected and revokes the newer token too", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const first = await login(getApp(), s.email);
   const rotated = (await refreshWith(first.refreshToken)).json<Tokens>();
 
@@ -210,7 +210,7 @@ test("reusing a rotated refresh token after the grace window is rejected and rev
 });
 
 test("revoke reasons are persisted: rotated, logout, and NULL while active", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const a = await login(getApp(), s.email);
   const b = await login(getApp(), s.email);
   const rotated = (await refreshWith(a.refreshToken)).json<Tokens>();
@@ -229,7 +229,7 @@ test("revoke reasons are persisted: rotated, logout, and NULL while active", asy
 });
 
 test("a logged-out token presented after the grace window is rejected without revoking other devices", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const deviceA = await login(getApp(), s.email);
   const deviceB = await login(getApp(), s.email);
   await send(getApp(), {
@@ -246,7 +246,7 @@ test("a logged-out token presented after the grace window is rejected without re
 });
 
 test("the oldest active refresh tokens beyond the cap are evicted without triggering theft handling", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const logins: Tokens[] = [];
   // A fresh app per login: login is rate limited to 10 per minute per app instance
   for (let i = 0; i < 11; i++) {
@@ -272,7 +272,7 @@ test("the oldest active refresh tokens beyond the cap are evicted without trigge
 });
 
 test("a failure while issuing the new pair rolls the revocation back", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
 
   // Make inserting the new (unrevoked) token fail; revoking the old one still passes
@@ -291,7 +291,7 @@ test("a failure while issuing the new pair rolls the revocation back", async () 
 });
 
 test("login deletes the user's expired refresh tokens but keeps revoked unexpired ones", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const expired = await login(getApp(), s.email);
   const revoked = await login(getApp(), s.email);
   await send(getApp(), {
@@ -315,7 +315,7 @@ test("login deletes the user's expired refresh tokens but keeps revoked unexpire
 });
 
 test("refresh tokens expire in 7 days by the database clock", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   await login(getApp(), s.email);
   const rows = (await adminQuery(
     "SELECT extract(epoch FROM expires_at - created_at)::int AS ttl FROM refresh_tokens"
@@ -324,7 +324,7 @@ test("refresh tokens expire in 7 days by the database clock", async () => {
 });
 
 test("an expired refresh token is rejected", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
   await adminQuery("UPDATE refresh_tokens SET expires_at = now() - interval '1 minute'");
   const res = await send(getApp(), {
@@ -345,7 +345,7 @@ test("an unknown refresh token is rejected", async () => {
 });
 
 test("refresh picks up the user's current role", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
   await adminQuery("UPDATE users SET role = 'staff' WHERE id = $1", [s.adminId]);
   const res = await send(getApp(), {
@@ -359,7 +359,7 @@ test("refresh picks up the user's current role", async () => {
 });
 
 test("logout revokes the refresh token; logging out twice is still 204", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const tokens = await login(getApp(), s.email);
 
   for (let i = 0; i < 2; i++) {
@@ -404,7 +404,7 @@ test("CORS headers are set on a rate-limited 429 response", async () => {
       method: "POST",
       url: "/auth/login",
       headers: { origin: "https://app.example" },
-      payload: { email: "nobody@acme.com", password: "x" },
+      payload: { email: "nobody@acme.example", password: "x" },
     });
   }
   assert.equal(last?.statusCode, 429);
@@ -429,14 +429,14 @@ test("a CORS preflight is answered with 204 and does not consume the login rate 
     const res = await send(getApp(), {
       method: "POST",
       url: "/auth/login",
-      payload: { email: "nobody@acme.com", password: "x" },
+      payload: { email: "nobody@acme.example", password: "x" },
     });
     assert.notEqual(res.statusCode, 429, `login ${i + 1}`);
   }
 });
 
 test("concurrent refreshes for a user over the session cap never fail with a server error", async () => {
-  const s = await signupTenant(getApp(), "acme", "ada@acme.com");
+  const s = await signupTenant(getApp(), "acme", "ada@acme.example");
   const userId = s.adminId;
   const SESSIONS = 12;
   const CONCURRENCY = 5;
