@@ -128,7 +128,7 @@ type Reader = ReturnType<typeof createReader>;
  * NODE_ENV for every entry point. Unset or empty is "development"; any value outside NODE_ENVS
  * is a problem (and reads as "development" so it does not add misleading follow-on problems).
  */
-function readNodeEnv(env: Env, read: Reader): string {
+function readNodeEnv(read: Reader): string {
   const raw = read.str("NODE_ENV", "development");
   if ((NODE_ENVS as readonly string[]).includes(raw)) return raw;
   read.problem(`NODE_ENV must be one of ${NODE_ENVS.join(", ")} (got "${raw}")`);
@@ -320,7 +320,7 @@ export function loadDbConfig(env: Env): Readonly<DbConfig> {
 export function loadServerConfig(env: Env): Readonly<ServerConfig> {
   const problems: string[] = [];
   const read = createReader(env, problems);
-  const config = readServerConfig(env, read, readNodeEnv(env, read));
+  const config = readServerConfig(env, read, readNodeEnv(read));
   throwIfProblems(problems);
   return Object.freeze(config);
 }
@@ -332,7 +332,7 @@ export function loadServerConfig(env: Env): Readonly<ServerConfig> {
 export function loadConfig(env: Env): Readonly<Config> {
   const problems: string[] = [];
   const read = createReader(env, problems);
-  const nodeEnv = readNodeEnv(env, read);
+  const nodeEnv = readNodeEnv(read);
   const config: Config = {
     ...readDbConfig(env, read),
     ...readServerConfig(env, read, nodeEnv),
@@ -350,7 +350,7 @@ export function loadConfig(env: Env): Readonly<Config> {
 export function loadDispatchConfig(env: Env): Readonly<DispatchConfig> {
   const problems: string[] = [];
   const read = createReader(env, problems);
-  const nodeEnv = readNodeEnv(env, read);
+  const nodeEnv = readNodeEnv(read);
   const config: DispatchConfig = { ...readDbConfig(env, read), ...readLinkConfig(env, read, nodeEnv), nodeEnv };
   checkDbLogging(read, config.dbLogging, nodeEnv);
   throwIfProblems(problems);
