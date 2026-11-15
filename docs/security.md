@@ -40,8 +40,3 @@ need the **admin role**, which only migrations use.
   address exists in *some* tenant.
 
 See [Known limitations](limitations.md) for the full list.
-
-## Repository history
-
-MariaDB data files and an old MariaDB root password were committed in earlier history. They were
-removed from the tree, but still exist in git history. Don't reuse that password anywhere.
