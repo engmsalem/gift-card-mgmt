@@ -141,8 +141,11 @@ in `_test`** (override with `TEST_DB_DATABASE` only if you know what you're doin
   setup is tested too. It then runs the migrations, the drift check, the integration tests, and a
   boot smoke test of the compiled server running as the app role.
 
-**Debugging in VS Code:** the **Debug API** launch configuration starts the server under the
-debugger.
+**Debugging:** start the server with the inspector, then attach your editor's debugger to port 9229:
+
+```bash
+node --inspect --no-experimental-strip-types -r ts-node/register src/index.ts
+```
 
 ## Documentation
 
