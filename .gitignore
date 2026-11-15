@@ -1,6 +1,29 @@
-node_modules
-*.env
-GiftCardManagement_secure_data
-.cursorrules
+# Dependencies
+node_modules/
+
+# Build output
 dist/
-data/
+*.tsbuildinfo
+
+# Environment files: secrets stay local, the example is committed
+.env
+.env.*
+*.env
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
