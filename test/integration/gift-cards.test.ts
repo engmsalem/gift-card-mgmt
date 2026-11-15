@@ -6,16 +6,13 @@ import { isLuhnValid } from "../../src/gift-cards/card-number";
 import { CardCrypto } from "../../src/gift-cards/card-crypto";
 import { requestHashIssue } from "../../src/gift-cards/request-hash";
 import {
-  PASSWORD,
   UUID_V7,
   adminQuery,
-  bearer,
   loadTestConfig,
-  login,
   send,
-  signupTenant,
+  setupTenantActors,
   useTestApp,
-  type SignupResult,
+  type TenantActors,
 } from "./helpers";
 import { openAdminTransaction, waitUntilBlocked } from "../support/lock-staging";
 
@@ -101,12 +98,7 @@ interface TransactionDto {
   actorUserId: string;
 }
 
-interface Actor {
-  signup: SignupResult;
-  staffId: string;
-  admin: Headers;
-  staff: Headers;
-}
+type Actor = TenantActors;
 
 const programBody = {
   name: "Holiday",
@@ -119,20 +111,7 @@ const programBody = {
   maxValue: 100000,
 };
 
-async function setupTenant(subdomain: string, email: string): Promise<Actor> {
-  const signup = await signupTenant(getApp(), subdomain, email);
-  const admin = bearer((await login(getApp(), signup.email)).accessToken);
-  const staffEmail = `staff@${subdomain}.example`;
-  const created = await send(getApp(), {
-    method: "POST",
-    url: "/users",
-    headers: admin,
-    payload: { name: "Sam", email: staffEmail, password: PASSWORD },
-  });
-  assert.equal(created.statusCode, 201, created.body);
-  const staff = bearer((await login(getApp(), staffEmail)).accessToken);
-  return { signup, staffId: created.json<{ id: string }>().id, admin, staff };
-}
+const setupTenant = (subdomain: string, email: string): Promise<Actor> => setupTenantActors(getApp(), subdomain, email);
 
 async function createProgram(headers: Headers, overrides: Record<string, unknown> = {}): Promise<string> {
   const res = await send(getApp(), {

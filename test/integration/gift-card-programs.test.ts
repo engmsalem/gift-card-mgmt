@@ -2,15 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import {
-  PASSWORD,
   UUID_V7,
   adminQuery,
-  bearer,
-  login,
   send,
+  setupTenantActors,
   signupTenant,
   useTestApp,
-  type SignupResult,
+  type TenantActors,
 } from "./helpers";
 
 const getApp = useTestApp();
@@ -75,26 +73,8 @@ const validProgram = {
   maxValue: 100000,
 };
 
-interface Actor {
-  signup: SignupResult;
-  admin: Headers;
-  staff: Headers;
-}
-
-async function setupTenant(subdomain: string, email: string): Promise<Actor> {
-  const signup = await signupTenant(getApp(), subdomain, email);
-  const admin = bearer((await login(getApp(), signup.email)).accessToken);
-  const staffEmail = `staff@${subdomain}.example`;
-  const created = await send(getApp(), {
-    method: "POST",
-    url: "/users",
-    headers: admin,
-    payload: { name: "Sam", email: staffEmail, password: PASSWORD },
-  });
-  assert.equal(created.statusCode, 201, created.body);
-  const staff = bearer((await login(getApp(), staffEmail)).accessToken);
-  return { signup, admin, staff };
-}
+const setupTenant = (subdomain: string, email: string): Promise<TenantActors> =>
+  setupTenantActors(getApp(), subdomain, email);
 
 async function createProgram(headers: Headers, overrides: Record<string, unknown> = {}): Promise<ProgramDto> {
   const res = await post(headers, { ...validProgram, ...overrides });

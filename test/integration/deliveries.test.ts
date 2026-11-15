@@ -6,13 +6,10 @@ import { hashDeliveryToken } from "../../src/gift-cards/delivery-token";
 import { dispatchAllDue } from "../../src/scripts/dispatch-deliveries";
 import { DeliveryDispatcher, type DispatcherLog } from "../../src/services/deliveryDispatcher";
 import {
-  PASSWORD,
   adminQuery,
-  bearer,
   getAppDataSource,
-  login,
   send,
-  signupTenant,
+  setupTenantActors,
   useTestApp,
 } from "./helpers";
 import { RecordingDeliverySender } from "../support/recording-delivery-sender";
@@ -50,18 +47,8 @@ interface Actor {
 }
 
 async function setupTenant(subdomain: string, email: string): Promise<Actor> {
-  const signup = await signupTenant(getApp(), subdomain, email);
-  const admin = bearer((await login(getApp(), signup.email)).accessToken);
-  const staffEmail = `staff@${subdomain}.example`;
-  const created = await send(getApp(), {
-    method: "POST",
-    url: "/users",
-    headers: admin,
-    payload: { name: "Sam", email: staffEmail, password: PASSWORD },
-  });
-  assert.equal(created.statusCode, 201, created.body);
-  const staff = bearer((await login(getApp(), staffEmail)).accessToken);
-  return { tenantId: signup.tenantId, adminId: signup.adminId, staffId: created.json<{ id: string }>().id, admin, staff };
+  const { signup, staffId, admin, staff } = await setupTenantActors(getApp(), subdomain, email);
+  return { tenantId: signup.tenantId, adminId: signup.adminId, staffId, admin, staff };
 }
 
 async function createProgram(headers: Headers, overrides: Record<string, unknown> = {}): Promise<string> {
