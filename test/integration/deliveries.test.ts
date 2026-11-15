@@ -15,7 +15,7 @@ import {
   signupTenant,
   useTestApp,
 } from "./helpers";
-import { RecordingDeliverySender, tokenOf } from "../support/recording-delivery-sender";
+import { RecordingDeliverySender } from "../support/recording-delivery-sender";
 
 const LINK_BASE = "http://localhost:3000/gift";
 
@@ -841,7 +841,10 @@ test("resend during sending: the late outcome of the old send does not touch the
 test("resend and void concurrently: no deadlock; voided and cancelled", async () => {
   const a = await setupTenant("acme", "ada@acme.com");
   const programId = await createProgram(a.admin);
-  const { card, delivery } = await issueOk(a.admin, programId);
+  // Scheduled for later, so the delivery is `scheduled` whichever request wins: resend keeps the
+  // send date and sends nothing, and void cancels it. (Issued for now, it would be `sent` and void
+  // would rightly keep `sent`, making the outcome depend on the order.)
+  const { card, delivery } = await issueOk(a.admin, programId, { sendAt: new Date(Date.now() + 3600_000).toISOString() });
 
   const [r, v] = await Promise.all([resend(a.admin, card.id), voidCard(a.admin, card.id)]);
   assert.ok(r.statusCode === 200 || r.statusCode === 409, `resend: ${r.statusCode} ${r.body}`);
@@ -852,7 +855,7 @@ test("resend and void concurrently: no deadlock; voided and cancelled", async ()
   assert.equal(row.token_hash, null);
   const [c] = (await adminQuery(`SELECT status FROM gift_cards WHERE id = $1`, [card.id])) as { status: string }[];
   assert.equal(c.status, "voided");
-  for (const m of sender.messages) assert.equal((await reveal(tokenOf(m.link))).statusCode, 404);
+  assert.equal(sender.messages.length, 0, "nothing was due, so nothing was sent");
 });
 
 test("a voided card's link 404s", async () => {
