@@ -11,6 +11,7 @@ import {
   send,
   setupTenantActors,
   useTestApp,
+  type TenantActors,
 } from "./helpers";
 import { RecordingDeliverySender } from "../support/recording-delivery-sender";
 
@@ -38,18 +39,9 @@ interface CardWithDelivery {
   card: { id: string; last4: string };
   delivery: DeliveryDto;
 }
-interface Actor {
-  tenantId: string;
-  adminId: string;
-  staffId: string;
-  admin: Headers;
-  staff: Headers;
-}
 
-async function setupTenant(subdomain: string, email: string): Promise<Actor> {
-  const { signup, staffId, admin, staff } = await setupTenantActors(getApp(), subdomain, email);
-  return { tenantId: signup.tenantId, adminId: signup.adminId, staffId, admin, staff };
-}
+const setupTenant = (subdomain: string, email: string): Promise<TenantActors> =>
+  setupTenantActors(getApp(), subdomain, email);
 
 async function createProgram(headers: Headers, overrides: Record<string, unknown> = {}): Promise<string> {
   const res = await send(getApp(), {
@@ -174,7 +166,7 @@ test("immediate delivery: sent on issue, the link carries the token in the fragm
   assert.equal(sender.messages.length, 1);
   const message = sender.messages[0];
   assert.equal(message.deliveryId, delivery.id);
-  assert.equal(message.tenantId, a.tenantId);
+  assert.equal(message.tenantId, a.signup.tenantId);
   assert.deepEqual(message.to, { name: "Rita Recipient", email: "rita@example.com" });
   assert.equal(message.senderName, "Sam Sender");
   assert.equal(message.message, "Happy holidays");
@@ -340,7 +332,7 @@ test("resend invalidates the old token; the new one works; audited", async () =>
     `SELECT user_id, details FROM audit_logs WHERE action = 'gift_card_delivery.resent'`
   )) as { user_id: string; details: Record<string, unknown> }[];
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].user_id, a.adminId);
+  assert.equal(rows[0].user_id, a.signup.adminId);
   assert.deepEqual(rows[0].details, { giftCardId: card.id, deliveryId: delivery.id, recipientChanged: false });
 });
 
@@ -540,7 +532,7 @@ test("the dispatcher logs only ids, the attempt and the error name", async () =>
   assert.equal(lines[0].level, "warn");
   assert.deepEqual(lines[0].obj, {
     deliveryId: delivery.id,
-    tenantId: a.tenantId,
+    tenantId: a.signup.tenantId,
     attempt: 1,
     errName: "Error",
   });

@@ -98,8 +98,6 @@ interface TransactionDto {
   actorUserId: string;
 }
 
-type Actor = TenantActors;
-
 const programBody = {
   name: "Holiday",
   cardType: "paid",
@@ -111,7 +109,8 @@ const programBody = {
   maxValue: 100000,
 };
 
-const setupTenant = (subdomain: string, email: string): Promise<Actor> => setupTenantActors(getApp(), subdomain, email);
+const setupTenant = (subdomain: string, email: string): Promise<TenantActors> =>
+  setupTenantActors(getApp(), subdomain, email);
 
 async function createProgram(headers: Headers, overrides: Record<string, unknown> = {}): Promise<string> {
   const res = await send(getApp(), {
