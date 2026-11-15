@@ -7,8 +7,9 @@ The endpoints are in the [API reference](api.md#gift-cards).
 ## Programs
 
 Each tenant defines programs: paid or promotional, one currency, a country (ISO 3166-1, e.g. `CA`)
-and an optional region (`CA-QC`). Currency, country, prefix, number length and card type are fixed
-once the program has issued a card. Programs are retired, never deleted.
+and an optional region (`CA-QC`). Card type, currency, country, region, prefix and number length
+are fixed once the program has issued a card. Programs are retired, never deleted, and a retired
+program can be made active again.
 
 ## Cards
 
@@ -28,9 +29,9 @@ once the program has issued a card. Programs are retired, never deleted.
 - **Ledger.** Every balance change is a ledger row (`issue`, `redeem`, `refund`, `void`), and the
   ledger can't be edited. Redemptions can't overdraw a card, even when requests arrive at the same
   time.
-- **Idempotency.** Issue, redeem and refund take an `idempotencyKey` (16–64 characters). Retrying
-  the same request returns the original result with `Idempotent-Replayed: true`. Reusing a key for
-  a different request is `409`.
+- **Idempotency.** Issue, redeem and refund take an `idempotencyKey` (16–64 letters, digits, `_`
+  or `-`), unique per tenant across all three. Retrying the same request returns the original
+  result with `Idempotent-Replayed: true`. Reusing a key for a different request is `409`.
 - **Redeem retries** are checked like a new request first: card number, PIN and lockout. Without
   that, retries could be used to probe cards. So if the card was PIN-locked in the meantime, the
   retry gets the same `404` as a wrong PIN rather than the original result. Staff can then see
@@ -41,16 +42,17 @@ once the program has issued a card. Programs are retired, never deleted.
 
 - **PIN lockout.** 5 wrong PINs lock the card for 30 minutes; an admin can unlock it. An unknown
   number, a wrong or missing PIN, a locked card and another tenant's card all get the same
-  `404 Invalid card number or PIN`.
+  `404 Invalid card number or PIN`. A missing PIN doesn't count towards the lockout.
 - **Staff limits.** Staff can issue paid cards only if an admin set a `staffDailyIssueLimit` on the
-  program, and only up to that total per rolling 24 hours. Promotional cards, refunds, suspend,
+  program, and only up to that total per staff member, per program, in any rolling 24 hours. Promotional cards, refunds, suspend,
   resume, void and unlock are admin only.
 
 ## Delivery
 
 - Issuing a card schedules an email to the recipient, immediately or at `sendAt` (up to 365 days
-  ahead). The email carries a link with a random token, valid for 90 days; only the token's SHA-256
-  hash is stored. Opening the link reveals the card.
+  ahead; a past `sendAt` sends right away). The email carries a link with a random token, valid for
+  90 days; only the token's SHA-256 hash is stored. Opening the link reveals the card.
+- A due email for a card that has since been voided or has expired is marked `cancelled`, not sent.
 - **Resending** issues a new link, and the old one stops working.
 - **Voiding** a card cancels an email that hasn't been sent yet and disables the link. An email
   already sent keeps its `sent` status, so the history stays accurate.
@@ -83,5 +85,5 @@ deliberate one-off migration run as the admin (owner) role.
 ## Trying it locally
 
 With `NODE_ENV=development` and `GIFT_CARD_DEV_PRINT_LINKS=true`, issuing a card prints its link to
-the console. Copy the `token` from it and POST it to `/gift-card-links/reveal` to see the card
+the console. Copy the part of the printed `link` after `#token=` and POST it to `/gift-card-links/reveal` to see the card
 number and PIN, then redeem with them. The [README](../README.md#4-try-it) has the commands.

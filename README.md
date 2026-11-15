@@ -134,10 +134,12 @@ Integration tests use `<DB_DATABASE>_test`: they apply the migrations to it and 
 between tests. As a safety net, they **refuse to run against any database whose name doesn't end
 in `_test`** (override with `TEST_DB_DATABASE` only if you know what you're doing), so your development data is never touched.
 
-**CI** (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`: lint,
-typecheck, build and unit tests on Node 22 and 24, then the integration tests, the migration drift
-check and a boot smoke test of the compiled server against PostgreSQL started from this repo's
-`docker-compose.yml`.
+**CI** (`.github/workflows/ci.yml`) runs two jobs on every pull request and every push to `main`:
+
+- **checks** (Node 22 and 24): lint, typecheck, build and unit tests.
+- **integration** (Node 24): starts PostgreSQL from this repo's `docker-compose.yml`, so the role
+  setup is tested too. It then runs the migrations, the drift check, the integration tests, and a
+  boot smoke test of the compiled server running as the app role.
 
 **Debugging in VS Code:** the **Debug API** launch configuration starts the server under the
 debugger.

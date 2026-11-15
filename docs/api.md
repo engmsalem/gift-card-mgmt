@@ -39,7 +39,8 @@ JSON schemas.
 | POST | `/users` | Bearer, admin | `{ name, email, password, role? }` | `201`. Creates a user in the caller's tenant (`role` defaults to `staff`) |
 
 Field rules: `subdomain` is 3–50 characters (lowercase letters, digits and hyphens); `password`
-is 8–72 characters; emails are trimmed and lowercased.
+is 8–72 characters and at most 72 bytes in UTF-8 (bcrypt ignores anything longer); emails are
+trimmed and lowercased.
 
 ## Gift card programs
 
@@ -50,7 +51,7 @@ All need a Bearer token.
 | POST | `/gift-card-programs` | admin | `{ name, cardType, currency, country, region?, cardNumberPrefix, cardNumberLength, pinRequired, maxValue, expiryMonths?, staffDailyIssueLimit? }` | `201` program |
 | GET | `/gift-card-programs` | admin, staff | none | `200` the tenant's programs |
 | GET | `/gift-card-programs/:id` | admin, staff | none | `200` program |
-| PATCH | `/gift-card-programs/:id` | admin | Any non-empty subset of the fields, or `status: "retired"` | `200` program. `409` (naming the fields) when changing currency, prefix, length or another fixed field after the first card |
+| PATCH | `/gift-card-programs/:id` | admin | Any subset of the fields, including `status: "active" \| "retired"` | `200` program. `400` if nothing would change. `409` (naming the fields) when changing card type, currency, country, region, prefix or length after the first card |
 
 ## Gift cards
 
@@ -66,10 +67,15 @@ All need a Bearer token.
 | POST | `/gift-cards/redeem` | admin, staff | `{ cardNumber, pin?, amount, idempotencyKey, externalReference? }` | `201 { transaction, card }`; replay `200`. 30 / minute per user |
 | POST | `/gift-card-transactions/:id/refunds` | admin | `{ amount, idempotencyKey }` | `201 { transaction, card }`; replay `200`. Refunds part or all of a redemption |
 | POST | `/gift-cards/:id/suspend`, `/resume`, `/void`, `/unlock` | admin | none | `200 { card, delivery }`. Repeating an action that's already in effect returns `200` |
-| POST | `/gift-cards/:id/resend` | admin, staff | `{ recipient?: { name?, email? } }` | `200 { delivery }` with a new link; the old one stops working. An email scheduled for later keeps its `sendAt`. Only admins may change the recipient. 10 / minute per user |
+| POST | `/gift-cards/:id/resend` | admin, staff | `{ recipient?: { name?, email? } }` | `200 { delivery }` with a new link; the old one stops working. An email scheduled for later keeps its `sendAt`. Only admins may change the recipient. `409` if the card is voided or expired. 10 / minute per user |
 
 Card numbers and PINs only ever appear in the reveal response. Everywhere else a card shows
 `last4` and `referenceNumber`.
+
+`idempotencyKey` is 16–64 characters of letters, digits, `_` and `-`. Keys are unique per tenant
+across issue, redeem and refund, and an issue key belongs to the user who sent it: the same key
+with a different request, or from another user, is `409`. See
+[Idempotency](gift-cards.md#balances).
 
 ## Gift links (public)
 
@@ -77,7 +83,9 @@ Card numbers and PINs only ever appear in the reveal response. Everywhere else a
 | ------ | ---- | ---- | ---- | -------- |
 | POST | `/gift-card-links/reveal` | none | `{ token }` | `200` card number, PIN, balance, sender and message. `Cache-Control: no-store`. 30 / minute per IP |
 
-The token is the 43-character value after `#token=` in the gift link.
+The token is the 43-character value after `#token=` in the gift link. An unknown or expired token,
+or a voided card, gets `404 Link is invalid or has expired`. A suspended, depleted or expired card
+still reveals, with its `status` set accordingly.
 
 ## Tokens
 
