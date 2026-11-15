@@ -15,11 +15,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Not on PATH (e.g. a terminal opened before PATH was changed): try the Windows installer's folder
+# Not on PATH (e.g. a terminal opened before PATH was changed): try the Windows installer's folder,
+# highest version first (sort -V, so 18 beats 9.6)
 if ! command -v psql >/dev/null; then
-  for dir in "/c/Program Files/PostgreSQL/"*/bin; do
-    [ -x "$dir/psql.exe" ] && PATH="$dir:$PATH"
-  done
+  newest=$(ls -d "/c/Program Files/PostgreSQL/"*/bin/psql.exe 2>/dev/null | sort -V | tail -n 1 || true)
+  [ -n "$newest" ] && PATH="$(dirname "$newest"):$PATH"
 fi
 command -v psql >/dev/null || {
   echo "psql not found. Install PostgreSQL 18 and add its bin folder (e.g. C:\\Program Files\\PostgreSQL\\18\\bin) to PATH." >&2
