@@ -124,8 +124,8 @@ test("unknown body fields return 400", async () => {
   assert.equal(nested.statusCode, 400);
 });
 
-// Valid per RFC 5321 limits (64-char local part, 63-char labels), 196 characters in total
-const LONG_EMAIL = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.com`;
+// Valid per RFC 5321 limits (64-char local part, 63-char labels), 200 characters in total
+const LONG_EMAIL = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.example`;
 
 test("a long but valid email is accepted for signup and for inviting a user", async () => {
   assert.ok(LONG_EMAIL.length > 150 && LONG_EMAIL.length <= 254);

@@ -244,7 +244,7 @@ export interface TenantActors {
 export async function setupTenantActors(app: FastifyInstance, subdomain: string, email: string): Promise<TenantActors> {
   const signup = await signupTenant(app, subdomain, email);
   const admin = bearer((await login(app, signup.email)).accessToken);
-  const staffEmail = `staff@${subdomain}.com`;
+  const staffEmail = `staff@${subdomain}.example`;
   const created = await send(app, {
     method: "POST",
     url: "/users",
