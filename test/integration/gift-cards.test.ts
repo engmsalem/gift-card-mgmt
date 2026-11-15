@@ -122,7 +122,7 @@ const programBody = {
 async function setupTenant(subdomain: string, email: string): Promise<Actor> {
   const signup = await signupTenant(getApp(), subdomain, email);
   const admin = bearer((await login(getApp(), signup.email)).accessToken);
-  const staffEmail = `staff@${subdomain}.com`;
+  const staffEmail = `staff@${subdomain}.example`;
   const created = await send(getApp(), {
     method: "POST",
     url: "/users",
