@@ -6,8 +6,8 @@ import { adminQuery, getAppDataSource, login, signupTenant, useTestApp } from ".
 const getApp = useTestApp();
 
 test("purgeExpiredRefreshTokens deletes expired rows (any user) and keeps the rest", async () => {
-  const a = await signupTenant(getApp(), "acme", "ada@acme.com");
-  const b = await signupTenant(getApp(), "globex", "bob@globex.com");
+  const a = await signupTenant(getApp(), "acme", "ada@acme.example");
+  const b = await signupTenant(getApp(), "globex", "bob@globex.example");
   await login(getApp(), a.email); // active
   await login(getApp(), a.email); // revoked below, unexpired
   await login(getApp(), b.email); // expired, active

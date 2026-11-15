@@ -217,7 +217,7 @@ afterEach(async () => {
 // ---------- issue ----------
 
 test("issue returns last4 only and the delivery; the number and PIN exist only as ciphertext", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const res = await issue(a.admin, issueBody(programId));
   assert.equal(res.statusCode, 201, res.body);
@@ -297,7 +297,7 @@ test("issue returns last4 only and the delivery; the number and PIN exist only a
 });
 
 test("a PIN-less program issues a card with no PIN", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { name: "No PIN", pinRequired: false, cardNumberLength: 19 });
   const { card } = await issueOk(a.admin, programId);
   assert.equal(card.hasPin, false);
@@ -308,7 +308,7 @@ test("a PIN-less program issues a card with no PIN", async () => {
 });
 
 test("issue replay: 200 with the header, the same card and delivery, nothing new written", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
   const first = await issue(a.admin, body);
@@ -324,7 +324,7 @@ test("issue replay: 200 with the header, the same card and delivery, nothing new
 });
 
 test("replay compares the normalized request: email case and whitespace do not matter", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
   assert.equal((await issue(a.admin, body)).statusCode, 201);
@@ -334,7 +334,7 @@ test("replay compares the normalized request: email case and whitespace do not m
 });
 
 test("same key with a different body -> 409, nothing written", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
   assert.equal((await issue(a.admin, body)).statusCode, 201);
@@ -347,7 +347,7 @@ test("same key with a different body -> 409, nothing written", async () => {
 });
 
 test("another user reusing the key -> 409, not a replay of the first user's card", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { staffDailyIssueLimit: 100000 });
   const body = issueBody(programId);
   assert.equal((await issue(a.admin, body)).statusCode, 201);
@@ -358,7 +358,7 @@ test("another user reusing the key -> 409, not a replay of the first user's card
 });
 
 test("retry after the program is retired -> 200 replay; a new key -> 409", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
   assert.equal((await issue(a.admin, body)).statusCode, 201);
@@ -373,7 +373,7 @@ test("retry after the program is retired -> 200 replay; a new key -> 409", async
 });
 
 test("retry after max_value is lowered -> 200 replay; a new key above it -> 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId, { amount: 5000 });
   assert.equal((await issue(a.admin, body)).statusCode, 201);
@@ -387,7 +387,7 @@ test("retry after max_value is lowered -> 200 replay; a new key above it -> 400"
 });
 
 test("concurrent same-key admin issues: exactly one 201 and one 200 replay, one card", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
   const [r1, r2] = await Promise.all([issue(a.admin, body), issue(a.admin, body)]);
@@ -402,7 +402,7 @@ test("concurrent same-key admin issues: exactly one 201 and one 200 replay, one 
 });
 
 test("issue: idempotency 23505 after rollback replays (staged on a held unique key)", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
 
@@ -461,7 +461,7 @@ test("issue: idempotency 23505 after rollback replays (staged on a held unique k
 });
 
 test("issue: a key committed concurrently for a different request -> 409 (staged)", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const body = issueBody(programId);
 
@@ -499,8 +499,8 @@ test("issue: a key committed concurrently for a different request -> 409 (staged
 });
 
 test("an unknown program, or another tenant's, -> 404", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
-  const b = await setupTenant("beta", "bob@beta.com");
+  const a = await setupTenant("acme", "ada@acme.example");
+  const b = await setupTenant("beta", "bob@beta.example");
   const bProgram = await createProgram(b.admin);
   assert.equal((await issue(a.admin, issueBody(bProgram))).statusCode, 404);
   assert.equal((await issue(a.admin, issueBody("0198a7a0-0000-7000-8000-000000000000"))).statusCode, 404);
@@ -510,7 +510,7 @@ test("an unknown program, or another tenant's, -> 404", async () => {
 // ---------- staff and admin rules ----------
 
 test("staff cannot issue a promotional card; staff cannot issue without a limit", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const promo = await createProgram(a.admin, { name: "Promo", cardType: "promotional" });
   const noLimit = await createProgram(a.admin, { name: "No limit" });
   const promoRes = await issue(a.staff, issueBody(promo));
@@ -523,7 +523,7 @@ test("staff cannot issue a promotional card; staff cannot issue without a limit"
 });
 
 test("staff limit: up to the limit succeeds, the next is 403; the admin is not subject to it", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { staffDailyIssueLimit: 1000 });
   assert.equal((await issue(a.staff, issueBody(programId, { amount: 600 }))).statusCode, 201);
   assert.equal((await issue(a.staff, issueBody(programId, { amount: 400 }))).statusCode, 201);
@@ -536,7 +536,7 @@ test("staff limit: up to the limit succeeds, the next is 403; the admin is not s
 });
 
 test("staff limit: concurrent staff issues cannot exceed it", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { staffDailyIssueLimit: 1000 });
   const results = await Promise.all(
     Array.from({ length: 5 }, () => issue(a.staff, issueBody(programId, { amount: 300 })))
@@ -550,7 +550,7 @@ test("staff limit: concurrent staff issues cannot exceed it", async () => {
 });
 
 test("staff limit: a concurrent same-key retry at the cap replays (200, one card) (staged on the advisory lock)", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { staffDailyIssueLimit: 500 });
   const body = issueBody(programId, { amount: 500 });
 
@@ -578,7 +578,7 @@ test("staff limit: a concurrent same-key retry at the cap replays (200, one card
 });
 
 test("the staff issue lock is per user and program: another user's issue is not blocked by it", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { staffDailyIssueLimit: 5000 });
   const tx = await openAdminTransaction();
   try {
@@ -593,7 +593,7 @@ test("the staff issue lock is per user and program: another user's issue is not 
 });
 
 test("amount over max_value -> 400; a bad shape -> 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { maxValue: 2000 });
   assert.equal((await issue(a.admin, issueBody(programId, { amount: 2001 }))).statusCode, 400);
   assert.equal((await issue(a.admin, issueBody(programId, { amount: 2000 }))).statusCode, 201);
@@ -623,7 +623,7 @@ test("amount over max_value -> 400; a bad shape -> 400", async () => {
 });
 
 test("a message may contain newlines; an absent message is stored as null", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const withLines = await issueOk(a.admin, programId, { message: "line one\nline two" });
   assert.equal(withLines.delivery.message, "line one\nline two");
@@ -635,7 +635,7 @@ test("a message may contain newlines; an absent message is stored as null", asyn
 });
 
 test("promotional expiry sets expires_at from the program", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { name: "Promo", cardType: "promotional", expiryMonths: 6 });
   const { card } = await issueOk(a.admin, programId);
   assert.ok(card.expiresAt, "expiresAt is set");
@@ -649,7 +649,7 @@ test("promotional expiry sets expires_at from the program", async () => {
 });
 
 test("sendAt: a future time is kept; beyond 365 days -> 400 with nothing persisted", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const soon = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
   const { delivery } = await issueOk(a.admin, programId, { sendAt: soon });
@@ -668,7 +668,7 @@ test("sendAt: a future time is kept; beyond 365 days -> 400 with nothing persist
 });
 
 test("sendAt beyond the window is rejected before any lock or write", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const far = new Date(Date.now() + 366 * 24 * 3600 * 1000).toISOString();
 
@@ -688,7 +688,7 @@ test("sendAt beyond the window is rejected before any lock or write", async () =
 });
 
 test("issue and program update serialize: an update that holds the program makes the issue wait, then see it", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
 
   const tx = await openAdminTransaction();
@@ -708,7 +708,7 @@ test("issue and program update serialize: an update that holds the program makes
 });
 
 test("issue and program update serialize: an in-flight issue holds the program, so the update then sees the card", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin, { staffDailyIssueLimit: 5000 });
 
   // Hold the staff issue lock so the issue stops after it has locked the program FOR SHARE
@@ -737,7 +737,7 @@ test("issue and program update serialize: an in-flight issue holds the program, 
 });
 
 test("per-user rate limit: 60 issues per minute each; one user's count does not affect another", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   // An invalid body is cheap and still counts: the limiter runs before validation
   for (let i = 1; i <= 60; i++) {
     const res = await issue(a.admin, {});
@@ -750,7 +750,7 @@ test("per-user rate limit: 60 issues per minute each; one user's count does not 
 });
 
 test("issue requires authentication and a role", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const anon = await send(getApp(), { method: "POST", url: "/gift-cards", payload: issueBody(programId) });
   assert.equal(anon.statusCode, 401);
@@ -759,7 +759,7 @@ test("issue requires authentication and a role", async () => {
 // ---------- reads ----------
 
 test("get by id, and by reference with or without hyphens or in lower case", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const issued = await issueOk(a.admin, programId);
   const { card } = issued;
@@ -786,8 +786,8 @@ test("get by id, and by reference with or without hyphens or in lower case", asy
 });
 
 test("another tenant's card is a 404 for every read and admin action", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
-  const b = await setupTenant("beta", "bob@beta.com");
+  const a = await setupTenant("acme", "ada@acme.example");
+  const b = await setupTenant("beta", "bob@beta.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
 
@@ -805,7 +805,7 @@ test("another tenant's card is a 404 for every read and admin action", async () 
 });
 
 test("transactions list: the issue row, newest last, exact keys", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   assert.equal((await action(a.admin, card.id, "void")).statusCode, 200);
@@ -844,7 +844,7 @@ test("transactions list: the issue row, newest last, exact keys", async () => {
 });
 
 test("a card past its expiry reads as expired", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   await adminQuery(`UPDATE gift_cards SET expires_at = now() - interval '1 day' WHERE id = $1`, [card.id]);
@@ -856,7 +856,7 @@ test("a card past its expiry reads as expired", async () => {
 // ---------- admin state changes ----------
 
 test("suspend / resume / void / unlock: transitions, idempotent repeats, one audit row per change", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
 
@@ -915,7 +915,7 @@ test("suspend / resume / void / unlock: transitions, idempotent repeats, one aud
 });
 
 test("only an admin can suspend, resume, void or unlock", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   for (const name of ["suspend", "resume", "void", "unlock"] as const) {
@@ -927,7 +927,7 @@ test("only an admin can suspend, resume, void or unlock", async () => {
 });
 
 test("an effectively expired card: suspend and resume -> 409 'Card has expired'; void still works", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   await adminQuery(`UPDATE gift_cards SET expires_at = now() - interval '1 day' WHERE id = $1`, [card.id]);
@@ -943,7 +943,7 @@ test("an effectively expired card: suspend and resume -> 409 'Card has expired';
 });
 
 test("a depleted card cannot be suspended", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   // Spend the card as the redeem path will: ledger row first, then the card row
@@ -960,7 +960,7 @@ test("a depleted card cannot be suspended", async () => {
 });
 
 test("void writes the void ledger row for the remaining balance and clears the delivery token, keeping a sent delivery sent", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card, delivery } = await issueOk(a.admin, programId, { amount: 4200 });
   // As if the delivery had been sent: a live token on a non-cancelled delivery
@@ -1000,7 +1000,7 @@ test("void writes the void ledger row for the remaining balance and clears the d
 });
 
 test("void of a card with no balance writes no ledger row", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   await adminQuery(
@@ -1022,7 +1022,7 @@ test("void of a card with no balance writes no ledger row", async () => {
 });
 
 test("concurrent voids serialize on the card lock: one void ledger row (staged)", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
 
@@ -1045,7 +1045,7 @@ test("concurrent voids serialize on the card lock: one void ledger row (staged)"
 // ---------- sendAt that passes `format: date-time` but is not a date ----------
 
 test("sendAt with a leap second (passes date-time, is not a Date) -> 400 and no card", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const res = await issue(a.admin, issueBody(programId, { sendAt: "2026-12-31T23:59:60Z" }));
   assert.equal(res.statusCode, 400, res.body);
@@ -1056,7 +1056,7 @@ test("sendAt with a leap second (passes date-time, is not a Date) -> 400 and no 
 // ---------- Content-Type: application/json with an empty body ----------
 
 test("an empty body with Content-Type application/json: body-optional routes work, body-required routes 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   const json = { ...a.admin, "content-type": "application/json" };
@@ -1081,7 +1081,7 @@ test("an empty body with Content-Type application/json: body-optional routes wor
 });
 
 test("resend with Content-Type application/json and an empty body works", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   const res = await send(getApp(), {
@@ -1094,7 +1094,7 @@ test("resend with Content-Type application/json and an empty body works", async 
 });
 
 test("malformed JSON is still a 400", async () => {
-  const a = await setupTenant("acme", "ada@acme.com");
+  const a = await setupTenant("acme", "ada@acme.example");
   const programId = await createProgram(a.admin);
   const { card } = await issueOk(a.admin, programId);
   for (const url of ["/gift-cards", `/gift-cards/${card.id}/suspend`]) {

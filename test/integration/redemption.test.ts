@@ -84,7 +84,7 @@ const newKey = () => randomBytes(12).toString("hex");
 
 /** A tenant with a PIN-required program and one card of `amount`. */
 async function fixture(amount = 10000, programOverrides: Record<string, unknown> = {}): Promise<Fixture> {
-  const actors = await setupTenantActors(getApp(), "acme", "ada@acme.com");
+  const actors = await setupTenantActors(getApp(), "acme", "ada@acme.example");
   const programId = await createGiftCardProgram(getApp(), actors.admin, programOverrides);
   const card = await issueGiftCard(getApp(), actors.admin, actors.signup.tenantId, programId, amount);
   return { actors, programId, card };
@@ -222,7 +222,7 @@ test("the idempotency oracle is closed: a used key never changes the answer for 
 });
 
 test("a PIN-less card redeems with the number only", async () => {
-  const actors = await setupTenantActors(getApp(), "acme", "ada@acme.com");
+  const actors = await setupTenantActors(getApp(), "acme", "ada@acme.example");
   const programId = await createGiftCardProgram(getApp(), actors.admin, {
     name: "No PIN",
     pinRequired: false,
@@ -312,7 +312,7 @@ test("a failed authentication logs a warn line with the user and no card number"
     logger: { level: "warn", stream: { write: (line: string) => void lines.push(line) } },
   });
   try {
-    const actors = await setupTenantActors(app, "acme", "ada@acme.com");
+    const actors = await setupTenantActors(app, "acme", "ada@acme.example");
     const programId = await createGiftCardProgram(app, actors.admin);
     const card = await issueGiftCard(app, actors.admin, actors.signup.tenantId, programId, 1000);
     lines.length = 0;
@@ -515,7 +515,7 @@ test("a key already used by an issue cannot be reused to redeem", async () => {
 
 test("another tenant's card number is the generic 404 and leaves the card untouched", async () => {
   const f = await fixture();
-  const b = await setupTenantActors(getApp(), "beta", "bob@beta.com");
+  const b = await setupTenantActors(getApp(), "beta", "bob@beta.example");
   assertAuthFailed(await redeem(b.staff, redeemBody(f.card, 100)));
   assertAuthFailed(await lookup(b.staff, { cardNumber: f.card.number, pin: f.card.pin }));
   assert.equal((await cardRow(f.card.id)).failed_pin_attempts, 0);
@@ -589,7 +589,7 @@ test("only a redemption can be refunded; unknown and other tenants' transactions
     idempotencyKey: newKey(),
   });
   assert.equal(unknown.statusCode, 404, unknown.body);
-  const b = await setupTenantActors(getApp(), "beta", "bob@beta.com");
+  const b = await setupTenantActors(getApp(), "beta", "bob@beta.example");
   const foreign = await refund(b.admin, transaction.id, { amount: 1, idempotencyKey: newKey() });
   assert.equal(foreign.statusCode, 404, foreign.body);
   assert.equal((await ledger(f.card.id)).length, 3);
