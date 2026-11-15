@@ -102,7 +102,7 @@ Both the app and `docker-compose.yml` read this file.
 | ---------------------- | -------- | ---------------------------- | ----- |
 | `HOST`                 | no       | `localhost`                  | Interface to listen on. Use `0.0.0.0` in Docker or production so the server is reachable from outside the container/host |
 | `PORT`                 | no       | `3000`                       | HTTP port the API listens on |
-| `NODE_ENV`             | no       | `development`                | `production` lowers log verbosity |
+| `NODE_ENV`             | no       | `development`                | Exactly `development`, `test` or `production`; anything else (e.g. `Production`, `staging`) is refused. `production` turns on the production safeguards and lowers log verbosity |
 | `DB_HOST`              | no       | `localhost`                  | |
 | `DB_PORT`              | no       | `5432`                       | Also the host port Docker publishes PostgreSQL on. Pick another (e.g. `5434`) if 5432 is taken |
 | `DB_DATABASE`          | yes      | none                         | e.g. `gift_card_mgmt`. Docker also creates `<DB_DATABASE>_test` for integration tests |
@@ -121,7 +121,7 @@ Both the app and `docker-compose.yml` read this file.
 | `CORS_ORIGIN`          | no*     | `*`                          | One origin, or a comma-separated list. *Required when `NODE_ENV=production` (set `*` explicitly to allow any origin) |
 | `TRUST_PROXY`          | no       | `false`                      | Set to `true` behind a reverse proxy / load balancer so rate limits use the real client IP (`X-Forwarded-For`). Leave `false` otherwise: clients could spoof their IP |
 | `CORS_METHODS`         | no       | `GET,POST,PUT,PATCH,DELETE`  | Comma-separated |
-| `CORS_ALLOWED_HEADERS` | no       | `Content-Type,Authorization` | Comma-separated |
+| `CORS_ALLOWED_HEADERS` | no       | `Content-Type,Authorization` | Comma-separated. Browsers can always read the `Idempotent-Replayed` and `Retry-After` response headers |
 
 The app refuses to start if anything is missing or invalid, and lists every problem at once.
 
@@ -221,7 +221,7 @@ All need a Bearer token except the reveal link. "Global" means the default 100 r
 | GET   | `/gift-card-programs` | admin, staff | none | `200` the tenant's programs |
 | GET   | `/gift-card-programs/:id` | admin, staff | none | `200` program |
 | PATCH | `/gift-card-programs/:id` | admin | any non-empty subset of the fields, or `status: "retired"` | `409` (naming the fields) when changing currency, prefix, length or other fixed fields after the first card |
-| POST  | `/gift-cards` | admin, staff | `{ programId, amount, idempotencyKey, recipient: { name, email }, senderName, message?, sendAt? }` | `201 { card, delivery }`. Replay of the same request: `200` + `Idempotent-Replayed: true`. 60 / minute per user |
+| POST  | `/gift-cards` | admin, staff | `{ programId, amount, idempotencyKey, recipient: { name, email }, senderName, message?, sendAt? }` | `201 { card, delivery }`. Replay of the same request: `200` + `Idempotent-Replayed: true`; it also retries the email if its first send failed and is due again. 60 / minute per user |
 | GET   | `/gift-cards/:id` | admin, staff | none | `200 { card, delivery }` |
 | GET   | `/gift-cards/by-reference/:reference` | admin, staff | none | Look up by the printed reference number |
 | GET   | `/gift-cards/:id/transactions` | admin, staff | none | Ledger rows, oldest first |
@@ -253,7 +253,7 @@ Digital gift cards, sent to a recipient by email. The full design, including the
 - **Idempotency.** Issue, redeem and refund take an `idempotencyKey` (16–64 characters). Retrying the same request returns the original result with `Idempotent-Replayed: true`. Reusing a key for a different request is `409`. A redeem retry is checked like a new request first: card number, PIN and lockout. Without that, retries could be used to probe cards. So if the card was PIN-locked in the meantime, the retry gets the same `404` as a wrong PIN rather than the original result. Staff can then see whether the redemption went through in the card's transaction history (`GET /gift-cards/:id/transactions`).
 - **PIN lockout.** 5 wrong PINs lock the card for 30 minutes; an admin can unlock it. An unknown number, a wrong or missing PIN, a locked card and another tenant's card all get the same `404 Invalid card number or PIN`.
 - **Staff limits.** Staff can issue paid cards only if an admin set a `staffDailyIssueLimit` on the program, and only up to that total per rolling 24 hours. Promotional cards, refunds, suspend, resume, void and unlock are admin only.
-- **Delivery.** Issuing a card schedules an email to the recipient (immediately or at `sendAt`, up to 365 days ahead). It carries a link with a random token, valid for 90 days; only its SHA-256 hash is stored. Opening the link reveals the card. Resending issues a new link and the old one stops working. Voiding a card cancels a pending email and disables its link. Sending is retried with backoff (5 attempts, 10 s timeout each). A send interrupted by a crash is picked up again after a 10-minute lease and counts as an attempt; after the 5th, the delivery is marked `failed` (`LeaseExpired`). Sending is at least once: if a timed-out send actually arrived, the recipient may get a second email, and only the newest link works.
+- **Delivery.** Issuing a card schedules an email to the recipient (immediately or at `sendAt`, up to 365 days ahead). It carries a link with a random token, valid for 90 days; only its SHA-256 hash is stored. Opening the link reveals the card. Resending issues a new link and the old one stops working. Voiding a card cancels an email that hasn't been sent yet and disables the link; an email already sent keeps its `sent` status, so the history stays accurate. Sending is retried with backoff (5 attempts, 10 s timeout each). A send interrupted by a crash is picked up again after a 10-minute lease and counts as an attempt; after the 5th, the delivery is marked `failed` (`LeaseExpired`). Sending is at least once: if a timed-out send actually arrived, the recipient may get a second email, and only the newest link works.
 - **Audit.** Program changes, issuing, state changes, lockouts and resends are written to `audit_logs`, in the same transaction as the change, with emails masked. Audit rows are kept indefinitely. Like the ledger, the table rejects `UPDATE` and `DELETE` for every role, so redacting a row needs a deliberate one-off migration run as the admin (owner) role.
 - **Logs** never contain card numbers, PINs, link tokens, full email addresses or SQL parameters. Database errors are logged as their code, constraint and table only.
 
@@ -318,7 +318,7 @@ Integration tests need the Docker database running. They automatically use `<DB_
 
 ## Project status
 
-_Last reviewed: 2026-11-13. All checks pass locally: lint, typecheck, build, 138 unit tests, 221 integration tests and the migration drift check._
+_Last reviewed: 2026-11-14. All checks pass locally: lint, typecheck, build, 140 unit tests, 229 integration tests and the migration drift check._
 
 ### Known limitations
 
